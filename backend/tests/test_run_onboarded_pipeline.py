@@ -555,3 +555,92 @@ class TestIntegrationWithSimulation:
             assert metrics.makespan_hour > 0
             assert metrics.bottleneck_utilization > 0
             assert len(metrics.job_lateness) > 0
+
+
+class TestOnboardingCoverageWarnings:
+    """Test that coverage warnings are properly integrated into run_onboarding."""
+
+    def test_coverage_warnings_included_in_meta_errors(self):
+        """When OnboardingAgent under-extracts, coverage warnings appear in meta.onboarding_errors."""
+        # Create a factory text mentioning 4 jobs
+        factory_text = "We have jobs J1, J2, J3, J4 to process through machines M1, M2."
+
+        # Mock OnboardingAgent to return deliberately under-extracted factory
+        # (only J1 and M1, simulating the bug we're detecting)
+        under_extracted_factory = FactoryConfig(
+            machines=[Machine(id="M1", name="Machine 1")],
+            jobs=[
+                Job(
+                    id="J1",
+                    name="Job 1",
+                    steps=[Step(machine_id="M1", duration_hours=1)],
+                    due_time_hour=24,
+                )
+            ],
+        )
+
+        with patch("backend.orchestrator.OnboardingAgent") as MockAgent, \
+             patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
+
+            # Mock OnboardingAgent to return the under-extracted factory
+            mock_agent_instance = MagicMock()
+            mock_agent_instance.run.return_value = under_extracted_factory
+            MockAgent.return_value = mock_agent_instance
+
+            # Mock other agents to avoid failures
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
+            mock_briefing.return_value = "# Test Briefing"
+
+            # Run the pipeline
+            from backend.orchestrator import run_onboarding
+            factory, meta = run_onboarding(factory_text)
+
+            # Verify that coverage warnings are in onboarding_errors
+            assert len(meta.onboarding_errors) > 0
+            # Should have warnings about missing J2, J3, J4 and M2
+            warning_texts = " ".join(meta.onboarding_errors)
+            assert "J2" in warning_texts or "J3" in warning_texts or "J4" in warning_texts
+            assert "M2" in warning_texts
+
+            # Verify used_default_factory is still False (no fallback)
+            assert meta.used_default_factory is False
+
+            # Verify the factory returned is exactly what the mocked OnboardingAgent returned
+            assert len(factory.machines) == 1
+            assert len(factory.jobs) == 1
+
+    def test_no_coverage_warnings_for_complete_extraction(self):
+        """When all mentioned jobs/machines are extracted, no coverage warnings."""
+        factory_text = "We have jobs J1, J2, J3 and machines M1, M2."
+
+        # Complete factory matching all mentions
+        complete_factory = FactoryConfig(
+            machines=[
+                Machine(id="M1", name="Machine 1"),
+                Machine(id="M2", name="Machine 2"),
+            ],
+            jobs=[
+                Job(id="J1", name="Job 1", steps=[Step(machine_id="M1", duration_hours=1)], due_time_hour=24),
+                Job(id="J2", name="Job 2", steps=[Step(machine_id="M2", duration_hours=1)], due_time_hour=24),
+                Job(id="J3", name="Job 3", steps=[Step(machine_id="M1", duration_hours=1)], due_time_hour=24),
+            ],
+        )
+
+        with patch("backend.orchestrator.OnboardingAgent") as MockAgent:
+            mock_agent_instance = MagicMock()
+            mock_agent_instance.run.return_value = complete_factory
+            MockAgent.return_value = mock_agent_instance
+
+            from backend.orchestrator import run_onboarding
+            factory, meta = run_onboarding(factory_text)
+
+            # Should have no coverage warnings (only normalization warnings if any)
+            coverage_warnings = [e for e in meta.onboarding_errors if "coverage warning" in e.lower()]
+            assert len(coverage_warnings) == 0
+
+            # Factory should be unchanged
+            assert len(factory.machines) == 2
+            assert len(factory.jobs) == 3

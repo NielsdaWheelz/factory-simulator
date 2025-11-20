@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-OPENAI_MODEL = "gpt-5-nano"
+OPENAI_MODEL = "gpt-4o-mini"
 
 
 def get_openai_api_key() -> str:

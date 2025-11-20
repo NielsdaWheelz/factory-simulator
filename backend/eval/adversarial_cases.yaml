@@ -383,3 +383,23 @@ cases:
     situation_text: |
       High-velocity, low-processing-time orders. Everything is quick.
     tags: ["short_durations", "fast_turnaround", "minimal"]
+
+  # Case 13: Fractional durations (mixed integer/fractional) — regression test for PR6
+  - id: fractional_3m_4j
+    kind: simulate
+    factory_description: |
+      We run 3 machines (M1 assembly, M2 drill, M3 pack).
+      Jobs J1, J2, J3, J4 each pass through those machines in sequence.
+      J1 takes 2h on M1, 3h on M2, 1h on M3 (total 6h).
+      J2 takes 1.5h on M1, 2h on M2, 1.5h on M3 (total 5h).
+      J3 takes 3h on M1, 1h on M2, 2h on M3 (total 6h).
+      J4 takes 2h on M1, 2h on M2, 4h on M3 (total 8h).
+    situation_text: |
+      Today is a normal production day. No rush orders or unexpected events.
+      We want to understand baseline performance and identify bottlenecks.
+    expectations:
+      min_machines: 3
+      min_jobs: 4
+      allow_toy_factory: false
+      allow_fallback: false
+    tags: ["fractional_durations", "mixed_integer", "4jobs_3machines", "regression_pr6"]

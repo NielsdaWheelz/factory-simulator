@@ -9,9 +9,15 @@ Core functions:
   Cleans up and validates a FactoryConfig, fixing bad durations, invalid references.
   Returns both the normalized factory (may be empty) and a list of repair messages.
   Does not handle fallback; that is the caller's responsibility.
+
+- estimate_onboarding_coverage(factory_text: str, factory: FactoryConfig) -> list[str]
+  Inspects raw text for explicit machine/job IDs and compares to parsed factory.
+  Returns human-readable warnings if mentioned entities are missing from the parsed output.
+  Pure, deterministic helper; no logging. Used for transparency/observability.
 """
 
 import logging
+import re
 from .models import FactoryConfig, Machine, Job, Step
 
 logger = logging.getLogger(__name__)
@@ -112,3 +118,62 @@ def normalize_factory(factory: FactoryConfig) -> tuple[FactoryConfig, list[str]]
     # Return normalized factory (may be empty) and warnings list
     # Fallback logic is handled by the caller (orchestrator or endpoint)
     return FactoryConfig(machines=factory.machines, jobs=normalized_jobs), warnings
+
+
+def estimate_onboarding_coverage(factory_text: str, factory: FactoryConfig) -> list[str]:
+    """
+    Inspect raw factory text for explicit machine/job IDs and compare to parsed factory.
+
+    Returns a list of human-readable warnings if explicitly mentioned entities
+    are missing from the parsed FactoryConfig. This is a pure helper for observability
+    and transparency; it does not change behavior or trigger fallback.
+
+    Heuristics:
+    - Machine IDs: Regex \bM[0-9A-Za-z_]+\b (e.g., M1, M2, M_ASSEMBLY)
+    - Job IDs: Regex \bJ[0-9A-Za-z_]+\b (e.g., J1, J2, J_WIDGET_A)
+    - Generate warnings only if explicit mentions exist but are missing from parsed config.
+
+    Args:
+        factory_text: Raw factory description (user input)
+        factory: Parsed FactoryConfig
+
+    Returns:
+        list[str]: Human-readable warnings (empty if no coverage issues detected)
+    """
+    warnings = []
+
+    # Extract candidate machine IDs from text
+    # Pattern: M followed by at least one digit, underscore, or letter (e.g., M1, M_ASSEMBLY, M01)
+    # Requires at least one digit or underscore to avoid false positives like "My"
+    machine_id_pattern = r'\bM[0-9][0-9A-Za-z_]*\b|\bM_[0-9A-Za-z_]+\b'
+    mentioned_machine_ids = set(re.findall(machine_id_pattern, factory_text))
+
+    # Extract candidate job IDs from text
+    # Pattern: J followed by at least one digit, underscore, or letter (e.g., J1, J_WIDGET, J01)
+    # Requires at least one digit or underscore to avoid false positives like "Job", "Jobs"
+    job_id_pattern = r'\bJ[0-9][0-9A-Za-z_]*\b|\bJ_[0-9A-Za-z_]+\b'
+    mentioned_job_ids = set(re.findall(job_id_pattern, factory_text))
+
+    # Get parsed IDs from factory
+    parsed_machine_ids = {m.id for m in factory.machines}
+    parsed_job_ids = {j.id for j in factory.jobs}
+
+    # Detect missing machines
+    missing_machines = mentioned_machine_ids - parsed_machine_ids
+    if missing_machines:
+        missing_list = sorted(list(missing_machines))
+        warnings.append(
+            f"Onboarding coverage warning: machines {missing_list} were mentioned in the description "
+            f"but did not appear in the parsed factory."
+        )
+
+    # Detect missing jobs
+    missing_jobs = mentioned_job_ids - parsed_job_ids
+    if missing_jobs:
+        missing_list = sorted(list(missing_jobs))
+        warnings.append(
+            f"Onboarding coverage warning: jobs {missing_list} were mentioned in the description "
+            f"but did not appear in the parsed factory."
+        )
+
+    return warnings

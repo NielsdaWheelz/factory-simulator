@@ -24,7 +24,7 @@ from .sim import simulate
 from .metrics import compute_metrics
 from .agents import IntentAgent, FuturesAgent, BriefingAgent, OnboardingAgent
 from .models import FactoryConfig, ScenarioSpec, SimulationResult, ScenarioMetrics, OnboardingMeta
-from .onboarding import normalize_factory
+from .onboarding import normalize_factory, estimate_onboarding_coverage
 
 logger = logging.getLogger(__name__)
 
@@ -236,8 +236,14 @@ def run_onboarding(factory_text: str) -> tuple[FactoryConfig, OnboardingMeta]:
         f"{len(normalized_factory.jobs)} jobs, {len(warnings)} warnings"
     )
 
+    # Step 2.5: Check for coverage issues (under-extraction detection)
+    coverage_warnings = estimate_onboarding_coverage(factory_text, normalized_factory)
+    if coverage_warnings:
+        for warning in coverage_warnings:
+            logger.warning(warning)
+
     # Step 3: Apply failure ladder
-    all_errors = warnings.copy()
+    all_errors = warnings.copy() + coverage_warnings
     if not normalized_factory.machines or not normalized_factory.jobs:
         logger.debug("   Failure level 2 (FALLBACK): normalized factory is empty")
         final_factory = build_toy_factory()
