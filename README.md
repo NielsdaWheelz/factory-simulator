@@ -110,29 +110,34 @@ factory-simulator/
 
 ## Quick Start
 
-### Installation
+### Installation & Setup
+
+For comprehensive setup instructions including environment variables and dependency installation, see [RUNTIME_SETUP_AND_TESTING.md](RUNTIME_SETUP_AND_TESTING.md).
+
+**Quick version**:
 
 ```bash
-# Clone the repository
-git clone <repo>
-cd factory-simulator
-
-# Create and activate virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
 # Install dependencies
-pip install pydantic openai pytest
-```
+uv pip install -U openai pydantic pytest
 
-### Environment Setup
+# or with pip:
+pip install -U openai pydantic pytest
 
-```bash
-# Set your OpenAI API key (required for LLM-backed agents)
+# Set your OpenAI API key
 export OPENAI_API_KEY="sk-..."
 ```
 
-### Running the Demo
+### Running the CLI
+
+```bash
+# With a description
+python -m main "we just got a rush order for J2, do not delay J1"
+
+# Or interactive mode
+python -m main
+```
+
+### Running Programmatically
 
 ```python
 from orchestrator import run_pipeline
@@ -209,19 +214,19 @@ All times are **integer hours**; no fractional scheduling.
 
 ### Agents
 
-**IntentAgent** (`agents.py:50–90`)
+**IntentAgent** (`agents.py:46–102`)
 - Input: Free-form user text + factory context
-- Output: `ScenarioIntent` enum (BASELINE, RUSH_FIRST, BALANCED, PROTECT_JOB)
+- Output: `ScenarioSpec` (BASELINE, RUSH_ARRIVES, or M2_SLOWDOWN)
 - Fallback: Returns BASELINE if LLM fails
 
-**FuturesAgent** (`agents.py:95–140`)
-- Input: `ScenarioIntent` + factory context
-- Output: list of 1–3 `ScenarioSpec` objects
-- Fallback: Returns [BASELINE, RUSH_ARRIVES(J2, 2, 12), M2_SLOWDOWN(M2, 2.0, 8, 14)]
+**FuturesAgent** (`agents.py:105–186`)
+- Input: `ScenarioSpec` + factory context
+- Output: list of 1–3 `ScenarioSpec` variations
+- Fallback: Returns [original_spec] if LLM fails
 
-**BriefingAgent** (`agents.py:145–190`)
-- Input: `ScenarioMetrics` (all scenarios) + factory context
-- Output: Markdown briefing with sections: Today at a Glance, Scenarios Analyzed, Key Risks, Jobs at Risk, Bottleneck Machines, Recommended Actions, Limitations
+**BriefingAgent** (`agents.py:189–276`)
+- Input: `ScenarioMetrics` (primary scenario) + optional context about all scenarios
+- Output: Markdown briefing with sections: Today at a Glance, Key Risks, Recommended Actions, Limitations
 - Fallback: Deterministic template with metrics plugged in
 
 All agents catch exceptions and use safe fallbacks—no unhandled errors.
@@ -316,6 +321,17 @@ Use as a guide; always verify with floor manager.
    - Single day (24 hours), toy factory (3 machines, 3 jobs)
    - Fits 4-hour implementation window, demonstrates core concepts
 
+## Documentation
+
+This project includes comprehensive documentation:
+
+- **[RUNTIME_SETUP_AND_TESTING.md](RUNTIME_SETUP_AND_TESTING.md)** – Installation, environment setup, running CLI and tests
+- **[LLM_MANUAL_TEST_PLAN_AND_NOTES.md](LLM_MANUAL_TEST_PLAN_AND_NOTES.md)** – Manual testing checklist with expected behavior for each scenario (T1–T5)
+- **[FACTORY_SIMULATOR_SPEC.md](FACTORY_SIMULATOR_SPEC.md)** – Complete technical specification
+- **[README.md](README.md)** – This file; overview and architecture
+
+Start with **RUNTIME_SETUP_AND_TESTING.md** to get the system running, then refer to **LLM_MANUAL_TEST_PLAN_AND_NOTES.md** for validation testing.
+
 ## Testing
 
 **Coverage**: ~1,815 lines of test code across 5 test files
@@ -341,80 +357,76 @@ pytest tests/ -v
 ## What's Implemented
 
 ✅ All core modules (config, models, world, sim, metrics, llm)
-✅ All three LLM agents (Intent, Futures, Briefing)
+✅ All three LLM agents (Intent, Futures, Briefing) with LLM-backed JSON mode
 ✅ Multi-scenario orchestrator (run_pipeline)
 ✅ Deterministic EDD scheduler with integer-hour precision
 ✅ Comprehensive test suite (1,815 lines, 5 files)
 ✅ Complete specification document (FACTORY_SIMULATOR_SPEC.md)
+✅ CLI implementation (`main.py`) – interactive and argument-based modes
+✅ Full setup and testing documentation
 
 ## What Remains to Be Done
 
 ### Near-term (Priority)
 
-1. **CLI Implementation** (`main.py`)
-   - Replace stub with actual command-line interface
-   - Accept user text as input (interactive prompt or argument)
-   - Pretty-print briefing output with formatting
+1. **Performance & Latency**
+   - Benchmark LLM agent call latency (target: <5s end-to-end)
+   - Optimize if needed (parallel agent execution, response caching)
+   - Profile agent calls (expect 1–2s each with gpt-5-nano)
 
-2. **Performance Optimization**
-   - Benchmark current latency (target: <2s end-to-end)
-   - Profile agent calls (expect 200–500ms each)
-   - Optimize if needed (caching, concurrent agents)
-
-3. **Error Handling & Logging**
+2. **Error Handling & Logging**
    - Add structured logging to each agent and simulation
    - Log latencies, validation outcomes, fallback triggers
    - Pretty-print logs with timestamps and status
 
-4. **Documentation**
+3. **Code Documentation**
    - Add docstrings to all public functions
-   - Create usage examples in README
    - Add inline comments to complex scheduling logic
 
 ### Medium-term (Enhancement)
 
-5. **Extended Factory Scenarios**
+4. **Extended Factory Scenarios**
    - Add more job/machine configurations (beyond toy factory)
    - Support configurable factory loading (JSON or YAML)
    - Create scenario templates (e.g., "high-mix low-volume", "lean manufacturing")
 
-6. **Simulation Enhancements**
+5. **Simulation Enhancements**
    - Add stochastic duration distributions (Monte Carlo)
    - Support alternative scheduling heuristics (SPT, LPT, critical path)
    - Implement job preemption and machine concurrency
    - Model material delays and setup times
 
-7. **Agent Improvements**
+6. **Agent Improvements**
    - Fine-tune prompts based on real factory data
    - Add confidence scores to agent outputs
    - Support follow-up questions ("Why is M2 the bottleneck?")
    - Implement agent chaining for more complex reasoning
 
-8. **Persistent State**
+7. **Persistent State**
    - Store briefings and simulation results to database
    - Enable historical trend analysis
    - Support audit trails and compliance logging
 
 ### Long-term (Product)
 
-9. **Web UI**
+8. **Web UI**
    - Interactive dashboard for scenario exploration
    - Real-time what-if analysis (adjust parameters, see results)
    - Visualization of machine utilization and job timelines
    - Export briefing as PDF or email
 
-10. **Real Data Integration**
+9. **Real Data Integration**
     - Connect to MES (Manufacturing Execution System)
     - Pull live factory config, in-progress jobs
     - Support actual machine and job data
     - Handle real disruptions (breakdowns, material delays)
 
-11. **Optimization**
+10. **Optimization**
     - Use OR-Tools or Cplex for optimal scheduling
     - Support multi-objective optimization (minimize lateness, balance load, etc.)
     - Recommend proactive actions (reorder jobs, add capacity)
 
-12. **Multi-day & Rolling Horizon**
+11. **Multi-day & Rolling Horizon**
     - Extend simulation beyond 24 hours
     - Support rolling schedules for continuous operations
     - Integrate with medium-term planning
@@ -437,7 +449,7 @@ pytest tests/ -v
 - `OPENAI_API_KEY` – Required for LLM agent calls (set before running)
 
 **Constants** (`config.py`):
-- `OPENAI_MODEL = "gpt-4"` – Model ID (configurable)
+- `OPENAI_MODEL = "gpt-5-nano"` – Model ID (configurable; using GPT-5 nano as default for optimal JSON mode compliance)
 
 ## License
 
