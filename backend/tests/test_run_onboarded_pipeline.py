@@ -127,7 +127,9 @@ class TestRunOnboardedPipelineStructure:
             assert output["briefing"] == expected_briefing
 
     def test_onboarded_pipeline_meta_structure(self):
-        """Verify meta dict has required fields."""
+        """Verify meta has required fields and is an OnboardingMeta object."""
+        from backend.models import OnboardingMeta
+
         with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
@@ -142,11 +144,13 @@ class TestRunOnboardedPipelineStructure:
             )
 
             meta = output["meta"]
-            assert isinstance(meta, dict)
-            assert "used_default_factory" in meta
-            assert "onboarding_errors" in meta
-            assert isinstance(meta["used_default_factory"], bool)
-            assert isinstance(meta["onboarding_errors"], list)
+            assert isinstance(meta, OnboardingMeta)
+            assert hasattr(meta, "used_default_factory")
+            assert hasattr(meta, "onboarding_errors")
+            assert hasattr(meta, "inferred_assumptions")
+            assert isinstance(meta.used_default_factory, bool)
+            assert isinstance(meta.onboarding_errors, list)
+            assert isinstance(meta.inferred_assumptions, list)
 
 
 class TestOnboardingAgentIntegration:
@@ -227,7 +231,7 @@ class TestNormalizeFactoryIntegration:
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             toy_factory = build_toy_factory()
-            mock_normalize.return_value = toy_factory
+            mock_normalize.return_value = (toy_factory, [])  # Return tuple with warnings
             mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
             mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
@@ -257,7 +261,7 @@ class TestNormalizeFactoryIntegration:
 
             # In PR1, OnboardingAgent stub always returns toy_factory
             # So used_default_factory should be True
-            assert output["meta"]["used_default_factory"] is True
+            assert output["meta"].used_default_factory is True
 
 
 class TestMetadataTracking:
@@ -279,7 +283,7 @@ class TestMetadataTracking:
             )
 
             # In PR1, this should always be True (stub returns toy factory)
-            assert isinstance(output["meta"]["used_default_factory"], bool)
+            assert isinstance(output["meta"].used_default_factory, bool)
 
     def test_onboarded_pipeline_onboarding_errors_empty_in_pr1(self):
         """Verify onboarding_errors is empty in PR1 (no LLM yet)."""
@@ -297,7 +301,7 @@ class TestMetadataTracking:
             )
 
             # In PR1, onboarding_errors should always be empty
-            assert output["meta"]["onboarding_errors"] == []
+            assert output["meta"].onboarding_errors == []
 
 
 class TestAgentChaining:

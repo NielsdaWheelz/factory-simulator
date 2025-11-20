@@ -23,7 +23,7 @@ from .world import build_toy_factory
 from .sim import simulate
 from .metrics import compute_metrics
 from .agents import IntentAgent, FuturesAgent, BriefingAgent, OnboardingAgent
-from .models import FactoryConfig, ScenarioSpec, SimulationResult, ScenarioMetrics
+from .models import FactoryConfig, ScenarioSpec, SimulationResult, ScenarioMetrics, OnboardingMeta
 from .onboarding import normalize_factory
 
 logger = logging.getLogger(__name__)
@@ -225,7 +225,7 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
 
     # Step 2: Normalize the factory
     logger.info("Step 2️⃣ Normalizing factory configuration...")
-    normalized_factory = normalize_factory(initial_factory)
+    normalized_factory, normalization_warnings = normalize_factory(initial_factory)
 
     # Track if we used the default factory (either from stub or fallback)
     # In PR1, the stub always returns toy factory, so this is always True initially
@@ -249,6 +249,12 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
         f"   ✓ Factory normalized: {len(normalized_factory.machines)} machines, {len(normalized_factory.jobs)} jobs "
         f"(used_default={used_default_factory})"
     )
+
+    # Log normalization warnings if any
+    if normalization_warnings:
+        logger.info(f"   Normalization repairs: {len(normalization_warnings)} issue(s)")
+        for warning in normalization_warnings:
+            logger.debug(f"     - {warning}")
 
     # Step 3: Initialize agents (except OnboardingAgent which we already used)
     logger.info("Step 3️⃣ Initializing agents...")
@@ -343,6 +349,14 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
     logger.info(f"   Used default factory: {used_default_factory}")
     logger.info("=" * 80)
 
+    # Create OnboardingMeta with all required fields
+    # onboarding_errors comes from normalization warnings
+    meta = OnboardingMeta(
+        used_default_factory=used_default_factory,
+        onboarding_errors=normalization_warnings,
+        inferred_assumptions=[],
+    )
+
     # Return all outputs in the structured format
     return {
         "factory": normalized_factory,
@@ -350,8 +364,5 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
         "specs": specs,
         "metrics": metrics_list,
         "briefing": briefing,
-        "meta": {
-            "used_default_factory": used_default_factory,
-            "onboarding_errors": [],
-        },
+        "meta": meta,
     }
