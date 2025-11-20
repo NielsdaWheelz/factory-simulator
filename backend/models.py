@@ -155,11 +155,19 @@ class SimulateResponse(BaseModel):
     meta: OnboardingMeta = Field(..., description="Metadata from the onboarding process")
 
 
+class OnboardingRequest(BaseModel):
+    """HTTP request body for POST /api/onboard endpoint.
+
+    Simple request containing just the factory description text.
+    """
+
+    factory_description: str = Field(..., description="Free-text description of the factory")
+
+
 class OnboardingResponse(BaseModel):
-    """HTTP response contract for POST /api/onboard endpoint (future implementation).
+    """HTTP response contract for POST /api/onboard endpoint.
 
     This is the frozen contract for the onboard endpoint response shape.
-    Used in a future sprint to implement POST /api/onboard.
     """
 
     factory: FactoryConfig = Field(..., description="The onboarded and normalized factory configuration")

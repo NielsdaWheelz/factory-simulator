@@ -6,7 +6,7 @@ Tests verify:
 - Due time normalization: invalid or missing due times are set to 24
 - Invalid machine references are dropped
 - Jobs with no valid steps are dropped
-- Fallback to toy factory when factory becomes empty
+- Empty factories are returned (fallback logic is at orchestration layer)
 - Normalization warnings are properly returned
 """
 
@@ -178,7 +178,7 @@ class TestNormalizeFactoryInvalidMachines:
         assert all(s.machine_id == "M1" for s in result.jobs[0].steps)
 
     def test_all_steps_invalid_drops_job(self):
-        """Job with all steps referencing invalid machines should be dropped."""
+        """Job with all steps referencing invalid machines should be dropped, resulting in empty factory."""
         factory = FactoryConfig(
             machines=[Machine(id="M1", name="Machine 1")],
             jobs=[
@@ -194,9 +194,10 @@ class TestNormalizeFactoryInvalidMachines:
             ],
         )
         result, warnings = normalize_factory(factory)
-        # Job should be dropped, fallback to toy factory
-        assert result == build_toy_factory()
-        assert any("empty factory" in w.lower() for w in warnings)
+        # Job should be dropped; factory becomes empty (fallback happens at orchestration layer)
+        assert len(result.machines) == 1
+        assert len(result.jobs) == 0
+        assert any("dropped" in w.lower() for w in warnings)
 
     def test_multiple_jobs_one_invalid(self):
         """Multiple jobs where one becomes empty should drop only that job."""
@@ -233,10 +234,10 @@ class TestNormalizeFactoryInvalidMachines:
 
 
 class TestNormalizeFactoryFallback:
-    """Tests for fallback to toy factory."""
+    """Tests for empty factory detection (fallback logic moved to orchestration layer)."""
 
-    def test_empty_machines_falls_back(self):
-        """Factory with no machines should fall back to toy factory."""
+    def test_empty_machines_returns_empty(self):
+        """Factory with no machines should return empty (fallback happens at orchestration layer)."""
         factory = FactoryConfig(
             machines=[],
             jobs=[
@@ -249,19 +250,23 @@ class TestNormalizeFactoryFallback:
             ],
         )
         result, warnings = normalize_factory(factory)
-        assert result == build_toy_factory()
+        # normalize_factory returns empty factory; fallback happens at orchestration layer
+        assert len(result.machines) == 0
+        assert len(result.jobs) == 0
 
-    def test_empty_jobs_falls_back(self):
-        """Factory with no jobs should fall back to toy factory."""
+    def test_empty_jobs_returns_empty(self):
+        """Factory with no jobs should return empty (fallback happens at orchestration layer)."""
         factory = FactoryConfig(
             machines=[Machine(id="M1", name="Machine 1")],
             jobs=[],
         )
         result, warnings = normalize_factory(factory)
-        assert result == build_toy_factory()
+        # normalize_factory returns empty factory; fallback happens at orchestration layer
+        assert len(result.machines) == 1
+        assert len(result.jobs) == 0
 
-    def test_all_jobs_become_empty_falls_back(self):
-        """Factory where all jobs become empty after cleanup should fall back."""
+    def test_all_jobs_become_empty_returns_empty(self):
+        """Factory where all jobs become empty should return empty factory."""
         factory = FactoryConfig(
             machines=[Machine(id="M1", name="Machine 1")],
             jobs=[
@@ -280,7 +285,9 @@ class TestNormalizeFactoryFallback:
             ],
         )
         result, warnings = normalize_factory(factory)
-        assert result == build_toy_factory()
+        # All jobs have invalid machine refs and are dropped; normalize_factory returns empty
+        assert len(result.machines) == 1
+        assert len(result.jobs) == 0
 
 
 class TestNormalizeFactoryImmutability:

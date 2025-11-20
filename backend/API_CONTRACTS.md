@@ -90,11 +90,11 @@ This document specifies the frozen HTTP and data contracts for the factory simul
 
 ## POST /api/onboard
 
-**Status**: Not yet implemented; reserved for future use.
+**Status**: Implemented in PR1.
 
-**Purpose** (future): Separate onboarding from simulation to allow users to review and confirm the factory structure before running scenarios.
+**Purpose**: Separate onboarding from simulation to allow users to review and confirm the factory structure before running scenarios.
 
-### Request (planned)
+### Request
 
 ```json
 {
@@ -102,7 +102,7 @@ This document specifies the frozen HTTP and data contracts for the factory simul
 }
 ```
 
-### Response (planned)
+### Response
 
 **Status**: 200 OK
 
@@ -135,6 +135,20 @@ This document specifies the frozen HTTP and data contracts for the factory simul
   }
 }
 ```
+
+**Contract Guarantees**:
+- Response always has exactly these 2 top-level keys: `factory`, `meta`
+- `factory` is a FactoryConfig object with `machines` and `jobs` lists
+- `meta` always includes:
+  - `used_default_factory`: boolean indicating if toy factory fallback was used
+  - `onboarding_errors`: list of strings (may be empty); documents repairs made during normalization
+  - `inferred_assumptions`: list of strings (always empty in PR1; reserved for future LLM inference)
+
+**Invariants**:
+- `used_default_factory` is `true` only if normalization fell back to toy factory (zero machines or zero jobs after normalization)
+- `used_default_factory` is `false` if onboarded/normalized factory is usable (has at least one machine and one job)
+- `onboarding_errors` is empty only if normalization made no repairs
+- Response is guaranteed to have a non-empty factory (either the onboarded one or toy factory fallback)
 
 ---
 
@@ -192,7 +206,9 @@ Performance metrics for a single scenario:
 
 ## Version History
 
-**PR0** (this PR): Introduced frozen contracts for `/api/simulate` response and reserved shape for future `/api/onboard`.
+**PR0**: Introduced frozen contracts for `/api/simulate` response and reserved shape for future `/api/onboard`.
+
+**PR1**: Implemented `/api/onboard` endpoint with OnboardingAgent and normalization wiring. Endpoint returns factory configuration and onboarding metadata.
 
 ---
 

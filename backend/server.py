@@ -12,8 +12,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .orchestrator import run_onboarded_pipeline
+from .orchestrator import run_onboarded_pipeline, is_toy_factory
 from .serializer import serialize_simulation_result
+from .agents import OnboardingAgent
+from .onboarding import normalize_factory
+from .models import OnboardingRequest, OnboardingResponse, OnboardingMeta
+from .world import build_toy_factory
 
 # Configure logging to show INFO level messages in terminal
 logging.basicConfig(
@@ -106,6 +110,82 @@ def simulate(req: SimulateRequest) -> dict:
 
     # Ensure result is JSON serializable
     serialized = serialize_simulation_result(api_response)
+
+    logger.info("=" * 80)
+    logger.info("✅ Response serialized and ready to send")
+    logger.info(f"   Total response keys: {list(serialized.keys())}")
+    logger.info("=" * 80)
+
+    return serialized
+
+
+@app.post("/api/onboard")
+def onboard(req: OnboardingRequest) -> dict:
+    """
+    HTTP endpoint for onboarding a factory description.
+
+    Wraps OnboardingAgent and normalization pipeline.
+    Returns just the factory configuration and metadata (no simulation).
+
+    Args:
+        req: Request containing factory_description
+
+    Returns:
+        A dict containing:
+        - factory: Factory configuration (machines and jobs)
+        - meta: Metadata (used_default_factory, onboarding_errors)
+
+    Raises:
+        RuntimeError: If pipeline encounters an error
+    """
+    logger.info("=" * 80)
+    logger.info("🚀 POST /api/onboard endpoint called")
+    logger.info(f"   Factory description length: {len(req.factory_description)} chars")
+    logger.info("   Starting onboarding pipeline...")
+    logger.info("=" * 80)
+
+    # Step 1: Call OnboardingAgent to parse factory description
+    agent = OnboardingAgent()
+    raw_factory = agent.run(req.factory_description)
+    logger.debug(f"OnboardingAgent returned factory with {len(raw_factory.machines)} machines, {len(raw_factory.jobs)} jobs")
+
+    # Step 2: Normalize the factory
+    normalized_factory, normalization_warnings = normalize_factory(raw_factory)
+    logger.debug(f"Normalization produced {len(normalization_warnings)} warnings")
+
+    # Step 3: Determine fallback level (structural check)
+    # Fallback is needed if the normalized factory is empty (no machines or no jobs)
+    if not normalized_factory.machines or not normalized_factory.jobs:
+        logger.debug("Fallback triggered: normalized factory is empty")
+        final_factory = build_toy_factory()
+        used_default_factory = True
+    else:
+        final_factory = normalized_factory
+        # Check if the normalized factory is structurally the toy factory
+        used_default_factory = is_toy_factory(final_factory)
+
+    # Step 4: Construct OnboardingMeta
+    meta = OnboardingMeta(
+        used_default_factory=used_default_factory,
+        onboarding_errors=normalization_warnings,
+        inferred_assumptions=[],
+    )
+
+    # Step 5: Construct and return response
+    response = OnboardingResponse(factory=final_factory, meta=meta)
+
+    logger.info("=" * 80)
+    logger.info("✅ Onboarding completed successfully")
+    logger.info(f"   Factory: {len(response.factory.machines)} machines, {len(response.factory.jobs)} jobs")
+    logger.info(f"   Used default factory: {meta.used_default_factory}")
+    logger.info(f"   Onboarding errors: {len(meta.onboarding_errors)}")
+    logger.info("   Serializing response...")
+
+    # Ensure result is JSON serializable
+    serialized = serialize_simulation_result({
+        "factory": response.factory,
+        "meta": response.meta,
+    })
 
     logger.info("=" * 80)
     logger.info("✅ Response serialized and ready to send")

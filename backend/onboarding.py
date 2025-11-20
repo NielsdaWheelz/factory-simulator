@@ -2,18 +2,17 @@
 Onboarding Module
 
 Provides utilities for safely onboarding free-text factory descriptions into
-the simulation pipeline without requiring LLM calls yet.
+the simulation pipeline.
 
 Core functions:
 - normalize_factory(factory: FactoryConfig) -> tuple[FactoryConfig, list[str]]
-  Cleans up and validates a FactoryConfig, fixing bad durations, invalid references,
-  and falling back to the toy factory if normalization results in an empty config.
-  Returns both the safe factory and a list of human-readable repair messages.
+  Cleans up and validates a FactoryConfig, fixing bad durations, invalid references.
+  Returns both the normalized factory (may be empty) and a list of repair messages.
+  Does not handle fallback; that is the caller's responsibility.
 """
 
 import logging
 from .models import FactoryConfig, Machine, Job, Step
-from .world import build_toy_factory
 
 logger = logging.getLogger(__name__)
 
@@ -31,22 +30,23 @@ def normalize_factory(factory: FactoryConfig) -> tuple[FactoryConfig, list[str]]
        - Compute the set of valid machine IDs from factory.machines.
        - Drop any steps whose machine_id is not in that set.
        - Drop any jobs that end up with zero steps.
-    4. Fallback behavior:
-       - If after normalization factory.machines is empty or factory.jobs is empty,
-         fall back to build_toy_factory().
+
+    This function performs repairs only and never decides fallback or uses default factories.
+    Fallback logic is handled at the orchestration layer (orchestrator.py or HTTP endpoints).
 
     Args:
         factory: FactoryConfig to normalize. Will not be mutated in-place.
 
     Returns:
         Tuple of (normalized_factory, warnings):
-        - normalized_factory: A new FactoryConfig safe for simulation
+        - normalized_factory: A new FactoryConfig with repairs applied (may be empty)
         - warnings: List of human-readable repair messages (empty if no repairs needed)
 
     Guarantee:
         - Never raises an exception
         - Never mutates input factory
-        - Always returns a simulatable FactoryConfig
+        - Never calls build_toy_factory() or any default factory
+        - Never signals fallback via warning messages
         - Every repair is documented in the warnings list
     """
     warnings = []
@@ -109,16 +109,6 @@ def normalize_factory(factory: FactoryConfig) -> tuple[FactoryConfig, list[str]]
                 job.id,
             )
 
-    # Fallback: if no machines or no jobs remain, use toy factory
-    if not factory.machines or not normalized_jobs:
-        logger.warning(
-            "Normalization resulted in empty factory (machines=%d, jobs=%d); "
-            "falling back to toy factory",
-            len(factory.machines),
-            len(normalized_jobs),
-        )
-        warnings.append("Normalization resulted in empty factory; using toy factory fallback")
-        return build_toy_factory(), warnings
-
-    # Return normalized factory and warnings list
+    # Return normalized factory (may be empty) and warnings list
+    # Fallback logic is handled by the caller (orchestrator or endpoint)
     return FactoryConfig(machines=factory.machines, jobs=normalized_jobs), warnings
