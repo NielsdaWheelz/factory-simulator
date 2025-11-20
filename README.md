@@ -429,6 +429,36 @@ This project includes comprehensive documentation:
 
 Start with **RUNTIME_SETUP_AND_TESTING.md** to get the system running, then refer to **LLM_MANUAL_TEST_PLAN_AND_NOTES.md** for validation testing.
 
+## API Contract Stability
+
+The backend `/api/onboard` and `/api/simulate` endpoints expose frozen HTTP contracts. These contracts are the source of truth for backend-frontend integration.
+
+**Canonical Sources**:
+- **Backend contract specification**: [backend/API_CONTRACTS.md](backend/API_CONTRACTS.md)
+- **Backend contract tests**: [backend/tests/test_api_contracts.py](backend/tests/test_api_contracts.py)
+- **Frontend type definitions**: [frontend/src/api.ts](frontend/src/api.ts)
+
+**Frozen Contracts**:
+
+1. **POST /api/onboard**
+   - Request: `{ "factory_description": string }`
+   - Response: `{ "factory": FactoryConfig, "meta": OnboardingMeta }`
+
+2. **POST /api/simulate**
+   - Request: `{ "factory_description": string, "situation_text": string }`
+   - Response: `{ "factory": FactoryConfig, "specs": ScenarioSpec[], "metrics": ScenarioMetrics[], "briefing": string, "meta": OnboardingMeta }`
+
+**Change Management**:
+
+Any change to response shape, field types, or semantics requires:
+1. Updating `backend/API_CONTRACTS.md` with explicit schema and example
+2. Updating `backend/models.py` (if dataclass structure changes)
+3. Updating `backend/tests/test_api_contracts.py` with new expected key sets
+4. Updating `frontend/src/api.ts` with matching TypeScript interfaces
+5. Coordinating with all consuming systems
+
+The test suite in `test_api_contracts.py` enforces exact key sets via snapshot assertions; any contract violation will fail tests loudly.
+
 ## Testing
 
 **Coverage**: ~1,815 lines of test code across 5 test files

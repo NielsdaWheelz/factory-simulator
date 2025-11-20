@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { simulate, SimulateResponse } from './api';
+import { simulate, type SimulateResponse } from './api';
 import './App.css';
 
 const DEFAULT_FACTORY_DESCRIPTION = `We run 3 machines (M1 assembly, M2 drill, M3 pack).
