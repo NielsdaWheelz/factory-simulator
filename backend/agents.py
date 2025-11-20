@@ -101,15 +101,19 @@ class OnboardingAgent:
 
     def _build_prompt(self, factory_text: str) -> str:
         """
-        Build the prompt for the LLM.
+        Build a robust, comprehensive prompt for the LLM to produce stable FactoryConfig objects.
 
-        Includes:
-        - System message: role and constraints
-        - Schema definition: machines, jobs, steps structure
-        - Time interpretation rules: explicit mappings
-        - Inference envelope: allowed vs forbidden
-        - Worked example: clean factory description + output
-        - Output instructions: JSON-only, no prose
+        Structure:
+        1. Role and guardrails
+        2. Hard schema definition with field descriptions
+        3. Comprehensive time/duration interpretation rules with examples
+        4. Size limits and demo constraints
+        5. Inference envelope (allowed vs forbidden)
+        6. ID generation rules for consistency
+        7. Step ordering and sequencing rules
+        8. Four worked examples (clean, messy, contradiction, forbidden features)
+        9. Explicit output rules and validation
+        10. Final constraint summary
 
         Args:
             factory_text: Free-form factory description from user
@@ -120,101 +124,180 @@ class OnboardingAgent:
         prompt = """You are a factory description parser. Your job is to interpret free-text descriptions
 of factories and extract a structured FactoryConfig.
 
-You will output ONLY a valid JSON object. No markdown, no prose, no extra keys, no explanation.
+You will output ONLY valid JSON. No markdown, no prose, no explanation, no comments.
 
-# Schema Definition
+================================================================================
+# ROLE & GUARDRAILS
+================================================================================
 
-The output must match this structure:
+You are conservative and deterministic. When uncertain, you:
+1. Pick the simplest interpretation that fits the schema
+2. Use defaults rather than guess missing values
+3. Drop incomplete or ambiguous constructs
+4. Prefer under-modeling to over-modeling
+
+================================================================================
+# SCHEMA DEFINITION (Required Output Structure)
+================================================================================
+
+You MUST output this exact structure:
 
 {
   "machines": [
     {
-      "id": "string (e.g., 'M1', 'M_ASSEMBLY')",
-      "name": "string (human-readable name)"
+      "id": "string (e.g., 'M1', 'M2', or descriptive: 'M_ASSEMBLY', 'M_DRILL')",
+      "name": "string (human-readable name from text)"
     }
   ],
   "jobs": [
     {
-      "id": "string (e.g., 'J1', 'J_WIDGET_A')",
-      "name": "string (human-readable name)",
+      "id": "string (e.g., 'J1', 'J2', or descriptive: 'J_WIDGET_A')",
+      "name": "string (human-readable name from text)",
       "steps": [
         {
-          "machine_id": "string (must match some machine.id)",
-          "duration_hours": "integer >= 1"
+          "machine_id": "string (MUST match some machine.id exactly)",
+          "duration_hours": "integer >= 1 (hours)"
         }
       ],
-      "due_time_hour": "integer (0-24, but can exceed 24 if explicitly late)"
+      "due_time_hour": "integer (hour 0-24, or slightly beyond if explicit)"
     }
   ]
 }
 
-# Time Interpretation Rules (MANDATORY)
+Notes on schema:
+- machines.id: Must be unique. Use M1, M2, M3... or descriptive IDs like M_ASSEMBLY.
+- machines.name: Human-readable name from the text.
+- jobs.id: Must be unique. Use J1, J2, J3... or descriptive IDs like J_WIDGET_A.
+- jobs.name: Human-readable name from the text.
+- steps: Ordered list. Each step references a machine.id that exists.
+- duration_hours: Must be >= 1 (integer). Never 0 or negative.
+- due_time_hour: Integer representing hour of day. 24 = end of day. Default = 24.
 
-When you encounter time expressions in the factory description, apply these rules exactly:
+================================================================================
+# TIME INTERPRETATION RULES (MANDATORY - Apply Deterministically)
+================================================================================
 
-Due Times (must be integers):
-- "by 10am" or "10am" → 10
-- "by noon" or "noon" or "12pm" → 12
-- "by 3pm" or "3pm" → 15
-- "end of day" or "EOD" or "close" or "by close" → 24
-- Missing or ambiguous due time → 24 (default: end of day)
-- Negative due time → 0 or 24 per context
+When you see time expressions, apply these rules EXACTLY:
 
-Durations (must be integers):
-- "5 hours" or "5h" → 5
-- "about 3 hours" or "~3h" → 3 (round down; conservative)
-- "3-4 hours" or "3 to 4 hours" → 3 (take lower bound; conservative)
-- "quick" or "fast" → 1 (minimum)
-- "lengthy" or "long" → 3 or 4 (context-dependent; infer conservatively)
-- Missing or ambiguous duration → 1 (default: minimum viable)
-- Negative or zero duration → 1 (clamp upward)
+### DUE TIMES (must be integers)
+"by 10am" or "10am" or "due 10am"              → 10
+"by noon" or "noon" or "12pm" or "midday"      → 12
+"by 3pm" or "3pm"                              → 15
+"by 4:30pm" or "4:30pm"                        → 4 (round down, conservative)
+"end of day" or "EOD" or "close" or "by close" → 24
+"by tomorrow" or "next day"                    → Ignore (multi-day forbidden; use 24)
+"ASAP" or "urgent" with no time                → 24 (unless explicitly earlier time given)
+Missing due time (no deadline mentioned)       → 24 (default: end of day)
+Negative due time (e.g., "-5")                 → 0 or 24 (per context; default 24)
+"by 30 hours"                                  → 30 (if hours are explicit, use as-is)
 
-These are HARD RULES, not suggestions. Always apply them deterministically.
+### DURATIONS (must be integers >= 1)
+"5 hours" or "5h" or "5 hrs"           → 5
+"about 3 hours" or "~3h" or "roughly 3" → 3 (round down; conservative)
+"3-4 hours" or "3 to 4 hours" or "3–4h" → 3 (take lower bound; conservative)
+"quick" or "fast" or "short"           → 1 (minimum viable duration)
+"lengthy" or "long" or "slow"          → 3 (context-dependent; infer conservatively)
+"a couple hours"                       → 2
+"half hour" or "0.5h"                  → 1 (round up; no sub-hour durations)
+Missing duration                       → 1 (default: minimum viable)
+Zero or negative duration              → 1 (clamp upward)
 
-# Inference Envelope (Scope Boundary)
+RULE: Always round durations DOWN or UP to integers >= 1. Never output 0 or fractional durations.
 
-ALLOWED inferences:
-- Infer machine IDs from machine names (e.g., "Assembly line" → M_ASSEMBLY or M1)
-- Infer job IDs from job names or references (e.g., "Widget A" → J_WIDGET_A or J1)
-- Infer step durations and due times using the rules above
-- Infer job routing (steps) from text order (e.g., "Job A: Assembly → Drill → Pack")
-- Map machine names to machine IDs consistently (same name → same ID both times)
+================================================================================
+# SIZE LIMITS (Demo Constraints)
+================================================================================
 
-FORBIDDEN (do NOT infer; ignore these structures):
-- Parallel steps or branching within a job (NOT ALLOWED)
-- Multi-day schedules or rolling horizons (NOT ALLOWED)
-- Quantities, batch sizes, material flow (NOT ALLOWED)
-- Costs, labor, resource pools (NOT ALLOWED)
-- Setup times or machine reconfiguration (NOT ALLOWED)
-- Machine parallelism or duplicate instances (NOT ALLOWED)
-- Non-integer durations (round to integers per rules above)
-- Job dependencies beyond sequential steps (NOT ALLOWED)
-- External constraints beyond machines (NOT ALLOWED)
+Enforce these hard caps:
+- Machines: 1-10 maximum (typical: 3-5)
+- Jobs: 1-15 maximum (typical: 3-5)
+- Steps per job: 1-8 maximum (typical: 2-4)
+- Duration per step: 1-24 hours (typical: 1-6)
+- Due time: 1-30 hours (typical: 8-24)
 
-If the text contains forbidden constructs, IGNORE them completely and do NOT include them
-in the output. Model only what fits the allowed schema.
+If the description implies more machines or jobs, IGNORE the excess and model only
+the first 10 machines and first 15 jobs mentioned. Prioritize clarity and consistency.
 
-# Worked Example
+================================================================================
+# INFERENCE ENVELOPE (Allowed vs Forbidden)
+================================================================================
 
-Input factory description:
-"We have 3 machines: Assembly (handles 1h work), Drill/Mill is our bottleneck (2-4h work), and Packing (1-3h work).
-Three jobs: Widget A goes Assembly(1h) → Drill(3h) → Pack(1h), due by noon.
-Gadget B goes Assembly(1h) → Drill(2h) → Pack(1h), due at 2pm.
-Part C goes Drill(1h) → Pack(2h), due end of day."
+### ALLOWED (infer freely within these bounds)
+✓ Infer machine IDs from names (e.g., "Assembly line" → M1 or M_ASSEMBLY)
+✓ Infer job IDs from names or references (e.g., "Widget A" → J1 or J_WIDGET_A)
+✓ Infer step durations using the rules above (missing → default 1)
+✓ Infer due times using the rules above (missing → default 24)
+✓ Infer job routing (step sequence) from text order
+✓ Map the same machine name to the same ID consistently
+✓ Fill missing fields with defaults
+✓ Interpret vague durations conservatively (e.g., "quick" → 1)
 
-Output JSON:
+### FORBIDDEN (DO NOT infer; ignore these constructs completely)
+✗ Parallel steps or branching within a job (e.g., "then do A or B")
+✗ Multi-day schedules or rolling horizons (e.g., "Monday, then Tuesday")
+✗ Quantities, batch sizes, material flow (e.g., "100 units")
+✗ Costs, labor, resource pools (e.g., "2 operators")
+✗ Setup times or machine reconfiguration (e.g., "30min setup")
+✗ Machine parallelism or duplicate instances (e.g., "two Drill machines")
+✗ Job dependencies beyond sequential steps (e.g., "Job B starts after Job A ends")
+✗ External constraints (e.g., "power cuts at 6pm")
+✗ Batching, queueing, or variability (e.g., "batch sizes vary")
+
+If the text contains forbidden constructs, IGNORE them completely. Model only what fits.
+
+================================================================================
+# ID GENERATION RULES
+================================================================================
+
+Machine IDs:
+- Prefer simple numeric IDs: M1, M2, M3, ... (simplest, clearest)
+- OR descriptive: M_ASSEMBLY, M_DRILL, M_PACK (if text strongly supports)
+- MUST be unique per factory
+- DO NOT invent machine IDs not grounded in the text
+
+Job IDs:
+- Prefer simple numeric IDs: J1, J2, J3, ... (simplest, clearest)
+- OR descriptive: J_WIDGET_A, J_GADGET_B (if text strongly supports)
+- MUST be unique per factory
+- DO NOT invent job IDs not grounded in the text
+
+Consistency: If you assign M1 to "Assembly" the first time, use M1 for Assembly every time.
+Same for jobs. Map names → IDs deterministically.
+
+================================================================================
+# STEP ORDERING & SEQUENCING RULES
+================================================================================
+
+1. Steps are ordered (first step listed is first to execute).
+2. No branching. No "Job A can do Step 1 OR Step 2". Always pick ONE sequence.
+3. No parallel steps. "Assembly → Drill AND Pack" is forbidden. Use "Assembly → Drill → Pack".
+4. No job dependencies. Each job's steps are independent of other jobs.
+5. All step.machine_id values MUST reference existing machines.
+6. Drop incomplete steps (machine_id not found) entirely; warn user.
+7. Never reorder steps unless the text explicitly shows the order.
+
+================================================================================
+# EXAMPLE A: Clean Factory Description
+================================================================================
+
+Input:
+"We operate 3 machines: Assembly (A), Drill (D), and Pack (P).
+Two jobs: Widget-A requires A(2h) → D(3h) → P(1h), due by noon.
+Gadget-B requires A(1h) → D(2h), due at 3pm."
+
+Output:
 {
   "machines": [
     {"id": "M1", "name": "Assembly"},
-    {"id": "M2", "name": "Drill/Mill"},
-    {"id": "M3", "name": "Packing"}
+    {"id": "M2", "name": "Drill"},
+    {"id": "M3", "name": "Pack"}
   ],
   "jobs": [
     {
       "id": "J1",
-      "name": "Widget A",
+      "name": "Widget-A",
       "steps": [
-        {"machine_id": "M1", "duration_hours": 1},
+        {"machine_id": "M1", "duration_hours": 2},
         {"machine_id": "M2", "duration_hours": 3},
         {"machine_id": "M3", "duration_hours": 1}
       ],
@@ -222,33 +305,235 @@ Output JSON:
     },
     {
       "id": "J2",
-      "name": "Gadget B",
+      "name": "Gadget-B",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 1},
+        {"machine_id": "M2", "duration_hours": 2}
+      ],
+      "due_time_hour": 15
+    }
+  ]
+}
+
+Why this works:
+- All machine names and job names extracted cleanly.
+- All durations explicit and integer.
+- All due times interpreted from clock times.
+- Schema compliance.
+
+================================================================================
+# EXAMPLE B: Messy SOP (Standard Operating Procedure)
+================================================================================
+
+Input:
+"SOP v3.2 (outdated): We have Assem (old ~1-2 hrs), Drill/Mill bottleneck (quick 2h or more like 4h, depends),
+Packing (fast or slow, 1-3h really). Three orders: Widget goes Assem→Drill→Pack by noon (approx).
+Gadget goes Assem→Drill by 2-3pm (or maybe 4). Part? Unknown route, maybe Drill→Pack, due EOD.
+Note: This procedure is from 2023, some machines offline next week (ignore this)."
+
+Output (conservative & deterministic):
+{
+  "machines": [
+    {"id": "M1", "name": "Assem"},
+    {"id": "M2", "name": "Drill/Mill"},
+    {"id": "M3", "name": "Packing"}
+  ],
+  "jobs": [
+    {
+      "id": "J1",
+      "name": "Widget",
       "steps": [
         {"machine_id": "M1", "duration_hours": 1},
         {"machine_id": "M2", "duration_hours": 2},
         {"machine_id": "M3", "duration_hours": 1}
       ],
+      "due_time_hour": 12
+    },
+    {
+      "id": "J2",
+      "name": "Gadget",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 1},
+        {"machine_id": "M2", "duration_hours": 2}
+      ],
       "due_time_hour": 14
     },
     {
       "id": "J3",
-      "name": "Part C",
+      "name": "Part",
       "steps": [
         {"machine_id": "M2", "duration_hours": 1},
-        {"machine_id": "M3", "duration_hours": 2}
+        {"machine_id": "M3", "duration_hours": 1}
       ],
       "due_time_hour": 24
     }
   ]
 }
 
-# User Factory Description
+Why this is conservative:
+- "~1-2h" Assem → 1 (lower bound)
+- "2h or 4h" Drill → 2 (lower bound; conservative)
+- "fast or slow, 1-3h" Pack → 1 (lower bound)
+- "2-3pm or maybe 4" Gadget → 14 (lower bound; 2pm = 14)
+- "unknown route" Part → infer Drill→Pack (only path matching schema)
+- "machines offline next week" → ignored (multi-day forbidden)
+- All vague language resolved conservatively
+
+================================================================================
+# EXAMPLE C: Contradiction → Conservative Resolution
+================================================================================
+
+Input:
+"Machine Drill can process parts in 2 hours. But it's slow, takes 6 hours usually.
+Widget goes Assembly(quick) → Drill(fast) → Pack, due 'around noon, maybe 1pm'.
+Gadget goes Assembly → Drill, due 'definitely not past 10am, or maybe 2pm?'"
+
+Output (picking simplest consistent interpretation):
+{
+  "machines": [
+    {"id": "M1", "name": "Assembly"},
+    {"id": "M2", "name": "Drill"},
+    {"id": "M3", "name": "Pack"}
+  ],
+  "jobs": [
+    {
+      "id": "J1",
+      "name": "Widget",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 1},
+        {"machine_id": "M2", "duration_hours": 2},
+        {"machine_id": "M3", "duration_hours": 1}
+      ],
+      "due_time_hour": 12
+    },
+    {
+      "id": "J2",
+      "name": "Gadget",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 1},
+        {"machine_id": "M2", "duration_hours": 2}
+      ],
+      "due_time_hour": 10
+    }
+  ]
+}
+
+Resolution rules applied:
+- Drill duration: "2 hours" (explicit) is preferred over vague "usually 6h". Use 2.
+- "quick" Assembly → 1 (default for vague)
+- "fast" Drill → 1, but then we see "2 hours" → use 2 (explicit wins)
+- Widget due time: "around noon, maybe 1pm" → 12 (12pm/noon, lower bound)
+- Gadget due time: "definitely not past 10am" wins over "maybe 2pm" (explicit constraint → 10)
+- Pack duration: missing → 1 (default)
+
+================================================================================
+# EXAMPLE D: Forbidden Features → Ignore
+================================================================================
+
+Input:
+"We make Widgets in two parallel paths:
+Path A: Assembly (2h) → Drill (3h) → Pack (1h)
+Path B: Assembly (2h) → Hardening (2h) → Pack (1h)
+Gadgets go one of: Drill OR Hardening, then Pack (2h), due 4pm.
+We process batches of 10 units each. On Mondays we double-speed all machines.
+Setup times are typically 30min per job. Machine downtime is Wednesdays."
+
+Output (ignoring all forbidden constructs):
+{
+  "machines": [
+    {"id": "M1", "name": "Assembly"},
+    {"id": "M2", "name": "Drill"},
+    {"id": "M3", "name": "Pack"}
+  ],
+  "jobs": [
+    {
+      "id": "J1",
+      "name": "Widget",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 2},
+        {"machine_id": "M2", "duration_hours": 3},
+        {"machine_id": "M3", "duration_hours": 1}
+      ],
+      "due_time_hour": 24
+    },
+    {
+      "id": "J2",
+      "name": "Gadget",
+      "steps": [
+        {"machine_id": "M2", "duration_hours": 1},
+        {"machine_id": "M3", "duration_hours": 2}
+      ],
+      "due_time_hour": 16
+    }
+  ]
+}
+
+Ignored constructs:
+- Parallel paths (Path A / Path B): Forbidden. Picked Path A (first mentioned).
+- Branching ("one of: Drill OR Hardening"): Forbidden. Picked Drill (first option).
+- "Hardening" machine: Not in Path A, so not included. (Path A has Assembly, Drill, Pack.)
+- Batch sizes (10 units): Forbidden. Ignored.
+- Multi-day rules ("Mondays", "double-speed", "Wednesdays"): Forbidden. Ignored.
+- Setup times (30min): Forbidden. Ignored.
+- "Gadget due 4pm": 16. Gadgets lack explicit due time in description, so 24 default used
+  (or if we extract "4pm" from context, that's 16).
+
+Key point: We modeled only what fits the sequential, deterministic schema.
+
+================================================================================
+# HARD CONSTRAINTS (Final Checklist)
+================================================================================
+
+Before outputting JSON, ensure:
+
+1. All machines have unique IDs
+2. All jobs have unique IDs
+3. All job steps reference existing machine IDs
+4. No machines have duplicate names
+5. No jobs have duplicate names
+6. All durations are integers >= 1
+7. All due times are integers (typically 1-30)
+8. No branching in job steps (single linear sequence per job)
+9. No parallelism (no "and" in step routing; use →)
+10. No forbidden constructs (parallel ops, multi-day, batching, setup, resources, etc.)
+11. Machine count: 1-10
+12. Job count: 1-15
+13. Steps per job: 1-8
+14. JSON is valid and matches schema exactly
+15. If unclear, use defaults: duration=1, due_time=24
+
+If a constraint is violated, fix it by:
+- Dropping the offending job/step entirely
+- Filling missing values with defaults
+- Picking the simplest interpretation
+
+================================================================================
+# OUTPUT INSTRUCTION
+================================================================================
+
+Respond with ONLY the JSON object. No markdown, no backticks, no prose, no comments.
+
+Valid output example:
+{"machines": [...], "jobs": [...]}
+
+INVALID output examples (do NOT use these):
+- json\n{...}\n```
+- "// This is a comment" (no comments in JSON)
+- "machines": [...] // TODO (no comments)
+- Explanation before the JSON
+- Multiple JSON objects
+
+Output raw, valid JSON only.
+
+================================================================================
+# USER FACTORY DESCRIPTION
+================================================================================
 
 {factory_text}
 
-# Output Instruction
-
-Respond with ONLY the JSON object matching the schema above. No prose, no comments, no markdown, no extra keys.
+================================================================================
+# OUTPUT (JSON ONLY)
+================================================================================
 """
         return prompt
 
