@@ -23,6 +23,7 @@ from backend.models import (
     OnboardingMeta,
     OnboardingRequest,
 )
+from backend.world import build_toy_factory
 
 
 @pytest.fixture
@@ -578,3 +579,173 @@ class TestOnboardEndpoint:
         assert "J3" in job_ids
         # J2 should be dropped
         assert "J2" not in job_ids
+
+
+class TestOnboardEndpointWithLLMAgent:
+    """Test /api/onboard endpoint with LLM-backed OnboardingAgent."""
+
+    @pytest.fixture
+    def client(self):
+        """Return a FastAPI TestClient for the app."""
+        return TestClient(app)
+
+    @pytest.fixture
+    def custom_factory_config(self):
+        """Return a custom FactoryConfig different from the default."""
+        return FactoryConfig(
+            machines=[
+                Machine(id="ASSEM", name="Assembly Station"),
+                Machine(id="DRILL", name="Drill Machine"),
+            ],
+            jobs=[
+                Job(
+                    id="JOB_A",
+                    name="Product A",
+                    steps=[
+                        Step(machine_id="ASSEM", duration_hours=2),
+                        Step(machine_id="DRILL", duration_hours=1),
+                    ],
+                    due_time_hour=10,
+                ),
+                Job(
+                    id="JOB_B",
+                    name="Product B",
+                    steps=[
+                        Step(machine_id="DRILL", duration_hours=2),
+                    ],
+                    due_time_hour=15,
+                ),
+            ],
+        )
+
+    def test_onboard_uses_llm_factory_when_available(self, client, custom_factory_config, monkeypatch):
+        """Test that /api/onboard uses OnboardingAgent-produced factory (not toy factory)."""
+
+        def mock_onboarding_agent_run(self, factory_text):
+            return custom_factory_config
+
+        monkeypatch.setattr(
+            "backend.server.OnboardingAgent.run",
+            mock_onboarding_agent_run,
+        )
+
+        response = client.post(
+            "/api/onboard",
+            json={"factory_description": "Custom factory description"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        factory = data["factory"]
+        meta = data["meta"]
+
+        # Should NOT use fallback (factory is valid)
+        assert meta["used_default_factory"] is False
+
+        # Verify it's the custom factory, not the toy factory
+        assert len(factory["machines"]) == 2
+        assert len(factory["jobs"]) == 2
+        assert factory["machines"][0]["id"] == "ASSEM"
+        assert factory["jobs"][0]["id"] == "JOB_A"
+        assert factory["jobs"][0]["due_time_hour"] == 10
+
+    def test_onboard_falls_back_if_onboarding_agent_returns_empty_factory(self, client, monkeypatch):
+        """Test that /api/onboard falls back if OnboardingAgent returns empty factory."""
+        empty_factory = FactoryConfig(machines=[], jobs=[])
+
+        def mock_onboarding_agent_run(self, factory_text):
+            return empty_factory
+
+        monkeypatch.setattr(
+            "backend.server.OnboardingAgent.run",
+            mock_onboarding_agent_run,
+        )
+
+        response = client.post(
+            "/api/onboard",
+            json={"factory_description": "This results in empty factory"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        factory = data["factory"]
+        meta = data["meta"]
+
+        # Should use fallback
+        assert meta["used_default_factory"] is True
+
+        # Should have fallback warning
+        assert len(meta["onboarding_errors"]) > 0
+
+        # Factory should be the toy factory
+        assert len(factory["machines"]) == 3
+        assert len(factory["jobs"]) == 3
+        toy = build_toy_factory()
+        assert factory["machines"][0]["id"] == toy.machines[0].id
+
+    def test_onboard_llm_agent_with_partially_valid_factory(self, client, monkeypatch):
+        """Test /api/onboard when OnboardingAgent returns factory with some invalid data."""
+        partially_valid_factory = FactoryConfig(
+            machines=[
+                Machine(id="M1", name="Machine 1"),
+                Machine(id="M2", name="Machine 2"),
+            ],
+            jobs=[
+                # Valid job
+                Job(
+                    id="J1",
+                    name="Job 1",
+                    steps=[Step(machine_id="M1", duration_hours=3)],
+                    due_time_hour=12,
+                ),
+                # Job with invalid machine reference
+                Job(
+                    id="J2",
+                    name="Job 2",
+                    steps=[Step(machine_id="M999", duration_hours=2)],
+                    due_time_hour=15,
+                ),
+                # Job with bad duration
+                Job(
+                    id="J3",
+                    name="Job 3",
+                    steps=[Step(machine_id="M2", duration_hours=0)],
+                    due_time_hour=20,
+                ),
+            ],
+        )
+
+        def mock_onboarding_agent_run(self, factory_text):
+            return partially_valid_factory
+
+        monkeypatch.setattr(
+            "backend.server.OnboardingAgent.run",
+            mock_onboarding_agent_run,
+        )
+
+        response = client.post(
+            "/api/onboard",
+            json={"factory_description": "Factory with some issues"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        factory = data["factory"]
+        meta = data["meta"]
+
+        # Should NOT use fallback (has valid jobs after repair)
+        assert meta["used_default_factory"] is False
+
+        # Should have errors for normalization
+        assert len(meta["onboarding_errors"]) > 0
+
+        # Jobs should be filtered/normalized
+        job_ids = {job["id"] for job in factory["jobs"]}
+        assert "J1" in job_ids  # Valid job preserved
+        assert "J2" not in job_ids  # Job with invalid machine ref dropped
+        assert "J3" in job_ids  # Job with bad duration normalized (not dropped)
+
+        # Check that J3's duration was normalized to 1
+        j3 = next((j for j in factory["jobs"] if j["id"] == "J3"), None)
+        assert j3 is not None
+        assert j3["steps"][0]["duration_hours"] == 1  # Normalized from 0
