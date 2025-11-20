@@ -39,7 +39,7 @@ class TestRunOnboardedPipelineStructure:
             # Check dict structure
             assert isinstance(output, dict)
             expected_keys = {
-                "factory", "situation_text", "specs", "metrics", "briefing", "meta"
+                "factory", "specs", "metrics", "briefing", "meta"
             }
             assert set(output.keys()) == expected_keys
 
@@ -63,8 +63,8 @@ class TestRunOnboardedPipelineStructure:
             assert len(factory.machines) > 0
             assert len(factory.jobs) > 0
 
-    def test_onboarded_pipeline_situation_text_preserved(self):
-        """Verify situation_text is preserved in output."""
+    def test_onboarded_pipeline_correct_output_keys(self):
+        """Verify output contains all required keys."""
         with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
@@ -73,13 +73,17 @@ class TestRunOnboardedPipelineStructure:
             mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
-            situation = "rush J1 today"
             output = run_onboarded_pipeline(
                 factory_text="",
-                situation_text=situation
+                situation_text="rush J1 today"
             )
 
-            assert output["situation_text"] == situation
+            # Verify all required keys are present
+            assert "factory" in output
+            assert "specs" in output
+            assert "metrics" in output
+            assert "briefing" in output
+            assert "meta" in output
 
     def test_onboarded_pipeline_specs_and_metrics_aligned(self):
         """Verify specs and metrics are aligned."""
@@ -399,10 +403,10 @@ class TestDeterminism:
             )
 
             # Key outputs should be identical
-            assert out1["situation_text"] == out2["situation_text"]
             assert out1["briefing"] == out2["briefing"]
             assert len(out1["specs"]) == len(out2["specs"])
             assert len(out1["metrics"]) == len(out2["metrics"])
+            assert out1["specs"] == out2["specs"]
 
 
 class TestErrorHandling:
@@ -512,7 +516,6 @@ class TestIntegrationWithSimulation:
             # Verify complete structure
             assert isinstance(output, dict)
             assert "factory" in output
-            assert "situation_text" in output
             assert "specs" in output
             assert "metrics" in output
             assert "briefing" in output

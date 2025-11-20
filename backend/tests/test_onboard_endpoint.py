@@ -68,7 +68,7 @@ class TestOnboardEndpoint:
             return valid_factory_config
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -91,7 +91,7 @@ class TestOnboardEndpoint:
             return valid_factory_config
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -142,7 +142,7 @@ class TestOnboardEndpoint:
             return valid_factory_config
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -196,7 +196,7 @@ class TestOnboardEndpoint:
             return bad_factory
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -239,7 +239,7 @@ class TestOnboardEndpoint:
             return empty_machines_factory
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -281,7 +281,7 @@ class TestOnboardEndpoint:
             return empty_jobs_factory
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -313,7 +313,7 @@ class TestOnboardEndpoint:
             return valid_factory_config
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
         monkeypatch.setattr(
@@ -358,7 +358,7 @@ class TestOnboardEndpoint:
             return valid_factory_config
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -391,7 +391,7 @@ class TestOnboardEndpoint:
             return valid_factory_config
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -427,7 +427,7 @@ class TestOnboardEndpoint:
             return bad_due_time_factory
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -453,7 +453,7 @@ class TestOnboardEndpoint:
             return valid_factory_config
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -476,7 +476,7 @@ class TestOnboardEndpoint:
             return valid_factory_config
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -503,7 +503,7 @@ class TestOnboardEndpoint:
             return valid_factory_config
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -553,7 +553,7 @@ class TestOnboardEndpoint:
             return mixed_factory
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -625,7 +625,7 @@ class TestOnboardEndpointWithLLMAgent:
             return custom_factory_config
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -657,7 +657,7 @@ class TestOnboardEndpointWithLLMAgent:
             return empty_factory
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 
@@ -719,7 +719,7 @@ class TestOnboardEndpointWithLLMAgent:
             return partially_valid_factory
 
         monkeypatch.setattr(
-            "backend.server.OnboardingAgent.run",
+            "backend.agents.OnboardingAgent.run",
             mock_onboarding_agent_run,
         )
 

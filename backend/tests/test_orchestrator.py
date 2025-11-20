@@ -1,19 +1,37 @@
 """
-Tests for orchestrator.py - End-to-end pipeline verification.
+Tests for orchestrator.py - Onboarding, decision pipeline, and full pipeline verification.
 
 Ensures:
-- Pipeline runs end-to-end with multiple scenarios
-- Correct types are returned
-- Behavior is deterministic
+- Onboarding (factory parsing + normalization + fallback ladder)
+- Decision pipeline (intent → futures → simulation → briefing)
+- Full onboarded pipeline integration
+- Correct types and behavior
+- Failure ladder behavior (OK / DEGRADED / FALLBACK)
 - No randomness or nondeterminism
 """
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
-from backend.orchestrator import run_pipeline
-from backend.models import ScenarioSpec, ScenarioType, SimulationResult, ScenarioMetrics, FactoryConfig
+from backend.orchestrator import (
+    run_pipeline,
+    run_onboarding,
+    run_decision_pipeline,
+    run_onboarded_pipeline,
+)
+from backend.models import (
+    ScenarioSpec,
+    ScenarioType,
+    SimulationResult,
+    ScenarioMetrics,
+    FactoryConfig,
+    Machine,
+    Job,
+    Step,
+    OnboardingMeta,
+)
 from backend.agents import FuturesResponse, BriefingResponse
+from backend.world import build_toy_factory
 
 
 class TestRunPipelineStructure:
@@ -414,3 +432,370 @@ class TestEdgeCases:
             assert len(output["specs"]) >= 1
             assert len(output["results"]) >= 1
             assert len(output["metrics"]) >= 1
+
+
+class TestRunOnboarding:
+    """Test run_onboarding function - factory parsing and normalization."""
+
+    def test_run_onboarding_ok_clean_factory(self):
+        """Test failure level 0 (OK): clean normalized factory."""
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent, \
+             patch("backend.orchestrator.normalize_factory") as mock_normalize:
+
+            # OnboardingAgent returns a valid factory
+            valid_factory = FactoryConfig(
+                machines=[Machine(id="M_CUSTOM", name="CustomMachine")],
+                jobs=[Job(id="J_CUSTOM", name="CustomJob", steps=[
+                    Step(machine_id="M_CUSTOM", duration_hours=2)
+                ], due_time_hour=12)]
+            )
+            mock_agent.return_value = valid_factory
+
+            # Normalize returns same factory with no warnings
+            mock_normalize.return_value = (valid_factory, [])
+
+            factory, meta = run_onboarding("custom factory")
+
+            # Level 0: clean, used_default_factory should be False
+            assert factory == valid_factory
+            assert meta.used_default_factory is False
+            assert meta.onboarding_errors == []
+
+    def test_run_onboarding_degraded_with_warnings(self):
+        """Test failure level 1 (DEGRADED): factory with normalization warnings."""
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent, \
+             patch("backend.orchestrator.normalize_factory") as mock_normalize:
+
+            valid_factory = FactoryConfig(
+                machines=[Machine(id="M1", name="M1")],
+                jobs=[Job(id="J1", name="J1", steps=[
+                    Step(machine_id="M1", duration_hours=2)
+                ], due_time_hour=12)]
+            )
+            mock_agent.return_value = valid_factory
+
+            # Normalize returns factory with warnings
+            mock_normalize.return_value = (valid_factory, ["Warning 1", "Warning 2"])
+
+            factory, meta = run_onboarding("factory text")
+
+            # Level 1: degraded (has warnings but not empty and not toy)
+            assert factory == valid_factory
+            assert meta.used_default_factory is False
+            assert "Warning 1" in meta.onboarding_errors
+            assert "Warning 2" in meta.onboarding_errors
+
+    def test_run_onboarding_fallback_empty_machines(self):
+        """Test failure level 2 (FALLBACK): normalized factory has no machines."""
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent, \
+             patch("backend.orchestrator.normalize_factory") as mock_normalize:
+
+            raw_factory = FactoryConfig(machines=[], jobs=[])
+            mock_agent.return_value = raw_factory
+
+            # Normalize returns empty factory
+            mock_normalize.return_value = (raw_factory, [])
+
+            factory, meta = run_onboarding("bad factory")
+
+            # Level 2: fallback
+            toy_factory = build_toy_factory()
+            assert factory.machines == toy_factory.machines
+            assert factory.jobs == toy_factory.jobs
+            assert meta.used_default_factory is True
+            assert "falling back to toy factory" in meta.onboarding_errors[0]
+
+    def test_run_onboarding_fallback_empty_jobs(self):
+        """Test failure level 2 (FALLBACK): normalized factory has no jobs."""
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent, \
+             patch("backend.orchestrator.normalize_factory") as mock_normalize:
+
+            raw_factory = FactoryConfig(
+                machines=[Machine(id="M1", name="M1")],
+                jobs=[]
+            )
+            mock_agent.return_value = raw_factory
+
+            # Normalize returns factory with machines but no jobs
+            mock_normalize.return_value = (raw_factory, [])
+
+            factory, meta = run_onboarding("bad factory")
+
+            # Level 2: fallback
+            toy_factory = build_toy_factory()
+            assert factory.machines == toy_factory.machines
+            assert factory.jobs == toy_factory.jobs
+            assert meta.used_default_factory is True
+            assert "falling back to toy factory" in meta.onboarding_errors[0]
+
+    def test_run_onboarding_toy_factory_detection(self):
+        """Test that toy factory is correctly identified as used_default_factory."""
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent, \
+             patch("backend.orchestrator.normalize_factory") as mock_normalize:
+
+            toy_factory = build_toy_factory()
+            mock_agent.return_value = toy_factory
+
+            # Normalize returns toy factory with no warnings
+            mock_normalize.return_value = (toy_factory, [])
+
+            factory, meta = run_onboarding("anything")
+
+            # Toy factory should be detected
+            assert meta.used_default_factory is True
+            assert factory == toy_factory
+
+    def test_run_onboarding_returns_tuple(self):
+        """Test that run_onboarding returns (FactoryConfig, OnboardingMeta) tuple."""
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent, \
+             patch("backend.orchestrator.normalize_factory") as mock_normalize:
+
+            toy_factory = build_toy_factory()
+            mock_agent.return_value = toy_factory
+            mock_normalize.return_value = (toy_factory, [])
+
+            result = run_onboarding("test")
+
+            assert isinstance(result, tuple)
+            assert len(result) == 2
+            factory, meta = result
+            assert isinstance(factory, FactoryConfig)
+            assert isinstance(meta, OnboardingMeta)
+
+
+class TestRunDecisionPipeline:
+    """Test run_decision_pipeline function - intent, futures, simulation, briefing."""
+
+    def test_run_decision_pipeline_basic_flow(self):
+        """Test basic flow through decision pipeline."""
+        factory = build_toy_factory()
+        meta = OnboardingMeta(used_default_factory=False, onboarding_errors=[], inferred_assumptions=[])
+
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
+
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "intent context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "futures context")
+            mock_briefing.return_value = "# Briefing"
+
+            result = run_decision_pipeline(factory, "test situation", meta)
+
+            assert isinstance(result, dict)
+            assert "factory" in result
+            assert "specs" in result
+            assert "metrics" in result
+            assert "briefing" in result
+            assert "meta" in result
+
+    def test_run_decision_pipeline_threads_meta_through(self):
+        """Test that input meta is returned unchanged."""
+        factory = build_toy_factory()
+        meta_in = OnboardingMeta(
+            used_default_factory=True,
+            onboarding_errors=["test error"],
+            inferred_assumptions=[]
+        )
+
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
+
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "context")
+            mock_briefing.return_value = "# Briefing"
+
+            result = run_decision_pipeline(factory, "test", meta_in)
+
+            assert result["meta"] == meta_in
+            assert result["meta"].used_default_factory is True
+            assert result["meta"].onboarding_errors == ["test error"]
+
+    def test_run_decision_pipeline_returns_factory_input(self):
+        """Test that returned factory is the input factory."""
+        factory = build_toy_factory()
+        meta = OnboardingMeta(used_default_factory=False, onboarding_errors=[], inferred_assumptions=[])
+
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
+
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "context")
+            mock_briefing.return_value = "# Briefing"
+
+            result = run_decision_pipeline(factory, "test", meta)
+
+            assert result["factory"] is factory
+
+    def test_run_decision_pipeline_multiple_scenarios(self):
+        """Test decision pipeline with multiple scenarios."""
+        factory = build_toy_factory()
+        meta = OnboardingMeta(used_default_factory=False, onboarding_errors=[], inferred_assumptions=[])
+
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
+
+            base_spec = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
+            mock_intent.return_value = (base_spec, "context")
+
+            specs_list = [
+                ScenarioSpec(scenario_type=ScenarioType.BASELINE),
+                ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J1", slowdown_factor=None),
+                ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, rush_job_id=None, slowdown_factor=2),
+            ]
+            mock_futures.return_value = (specs_list, "context")
+            mock_briefing.return_value = "# Briefing"
+
+            result = run_decision_pipeline(factory, "test", meta)
+
+            assert len(result["specs"]) == 3
+            assert len(result["metrics"]) == 3
+            assert result["specs"] == specs_list
+
+    def test_run_decision_pipeline_raises_on_empty_scenarios(self):
+        """Test that decision pipeline raises if FuturesAgent returns empty list."""
+        factory = build_toy_factory()
+        meta = OnboardingMeta(used_default_factory=False, onboarding_errors=[], inferred_assumptions=[])
+
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
+
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "context")
+            mock_futures.return_value = ([], "context")  # Empty!
+            mock_briefing.return_value = "# Briefing"
+
+            with pytest.raises(RuntimeError, match="FuturesAgent returned no scenarios"):
+                run_decision_pipeline(factory, "test", meta)
+
+    def test_run_decision_pipeline_metrics_match_specs(self):
+        """Test that metrics count matches specs count."""
+        factory = build_toy_factory()
+        meta = OnboardingMeta(used_default_factory=False, onboarding_errors=[], inferred_assumptions=[])
+
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
+
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "context")
+            specs_list = [
+                ScenarioSpec(scenario_type=ScenarioType.BASELINE),
+                ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J1", slowdown_factor=None),
+            ]
+            mock_futures.return_value = (specs_list, "context")
+            mock_briefing.return_value = "# Briefing"
+
+            result = run_decision_pipeline(factory, "test", meta)
+
+            assert len(result["specs"]) == 2
+            assert len(result["metrics"]) == 2
+
+    def test_run_decision_pipeline_passes_factory_to_agents(self):
+        """Test that factory is passed to IntentAgent and FuturesAgent."""
+        factory = build_toy_factory()
+        meta = OnboardingMeta(used_default_factory=False, onboarding_errors=[], inferred_assumptions=[])
+
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
+
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "context")
+            mock_briefing.return_value = "# Briefing"
+
+            result = run_decision_pipeline(factory, "test situation", meta)
+
+            # Check that IntentAgent was called with factory
+            assert mock_intent.called
+            intent_call = mock_intent.call_args
+            assert intent_call[0][0] == "test situation"
+            assert intent_call[1]["factory"] == factory
+
+            # Check that FuturesAgent was called with factory
+            assert mock_futures.called
+            futures_call = mock_futures.call_args
+            assert futures_call[1]["factory"] == factory
+
+
+class TestRunOnboardedPipelineIntegration:
+    """Test run_onboarded_pipeline as integration of onboarding + decision."""
+
+    def test_run_onboarded_pipeline_calls_both_phases(self):
+        """Test that run_onboarded_pipeline calls run_onboarding then run_decision_pipeline."""
+        with patch("backend.orchestrator.run_onboarding") as mock_onboarding, \
+             patch("backend.orchestrator.run_decision_pipeline") as mock_decision:
+
+            factory = build_toy_factory()
+            meta = OnboardingMeta(used_default_factory=False, onboarding_errors=[], inferred_assumptions=[])
+            mock_onboarding.return_value = (factory, meta)
+
+            mock_decision.return_value = {
+                "factory": factory,
+                "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+                "metrics": [MagicMock()],
+                "briefing": "# Briefing",
+                "meta": meta,
+            }
+
+            result = run_onboarded_pipeline("factory text", "situation text")
+
+            assert mock_onboarding.called
+            assert mock_decision.called
+            assert mock_onboarding.call_args[0][0] == "factory text"
+            assert mock_decision.call_args[0][1] == "situation text"
+
+    def test_run_onboarded_pipeline_wiring_factory_and_meta(self):
+        """Test that factory and meta from onboarding are passed to decision pipeline."""
+        with patch("backend.orchestrator.run_onboarding") as mock_onboarding, \
+             patch("backend.orchestrator.run_decision_pipeline") as mock_decision:
+
+            # Create a custom factory to verify it's passed through
+            custom_factory = FactoryConfig(
+                machines=[Machine(id="M_CUSTOM", name="Custom")],
+                jobs=[Job(id="J_CUSTOM", name="Custom", steps=[
+                    Step(machine_id="M_CUSTOM", duration_hours=1)
+                ], due_time_hour=24)]
+            )
+            custom_meta = OnboardingMeta(
+                used_default_factory=True,
+                onboarding_errors=["error1"],
+                inferred_assumptions=[]
+            )
+            mock_onboarding.return_value = (custom_factory, custom_meta)
+
+            mock_decision.return_value = {
+                "factory": custom_factory,
+                "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+                "metrics": [MagicMock()],
+                "briefing": "# Briefing",
+                "meta": custom_meta,
+            }
+
+            result = run_onboarded_pipeline("factory text", "situation text")
+
+            # Verify that custom_factory was passed to decision pipeline
+            decision_call = mock_decision.call_args
+            assert decision_call[0][0] == custom_factory
+            assert decision_call[0][2] == custom_meta
+
+            # Verify result contains the custom factory and meta
+            assert result["factory"] == custom_factory
+            assert result["meta"] == custom_meta
+
+    def test_run_onboarded_pipeline_returns_dict_with_all_keys(self):
+        """Test that result has all required keys."""
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
+
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "context")
+            mock_briefing.return_value = "# Briefing"
+
+            result = run_onboarded_pipeline("factory text", "situation text")
+
+            assert set(result.keys()) == {
+                "factory", "specs", "metrics", "briefing", "meta"
+            }
