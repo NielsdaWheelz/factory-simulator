@@ -27,8 +27,8 @@ class TestRunOnboardedPipelineStructure:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test Briefing"
 
             output = run_onboarded_pipeline(
@@ -49,8 +49,8 @@ class TestRunOnboardedPipelineStructure:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
             output = run_onboarded_pipeline(
@@ -69,8 +69,8 @@ class TestRunOnboardedPipelineStructure:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
             situation = "rush J1 today"
@@ -87,15 +87,15 @@ class TestRunOnboardedPipelineStructure:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([
                 ScenarioSpec(scenario_type=ScenarioType.BASELINE),
                 ScenarioSpec(
                     scenario_type=ScenarioType.RUSH_ARRIVES,
                     rush_job_id="J1",
                     slowdown_factor=None,
                 ),
-            ]
+            ], "test justification")
             mock_briefing.return_value = "# Test"
 
             output = run_onboarded_pipeline(
@@ -113,8 +113,8 @@ class TestRunOnboardedPipelineStructure:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             expected_briefing = "# Morning Briefing\n\nTest content."
             mock_briefing.return_value = expected_briefing
 
@@ -132,8 +132,8 @@ class TestRunOnboardedPipelineStructure:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
             output = run_onboarded_pipeline(
@@ -161,8 +161,8 @@ class TestOnboardingAgentIntegration:
 
             toy_factory = build_toy_factory()
             mock_onboarding.return_value = toy_factory
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
             factory_text = "custom factory description"
@@ -182,8 +182,8 @@ class TestOnboardingAgentIntegration:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
             output = run_onboarded_pipeline(
@@ -202,8 +202,8 @@ class TestOnboardingAgentIntegration:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
             output = run_onboarded_pipeline(
@@ -228,8 +228,8 @@ class TestNormalizeFactoryIntegration:
 
             toy_factory = build_toy_factory()
             mock_normalize.return_value = toy_factory
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
             run_onboarded_pipeline(
@@ -246,8 +246,8 @@ class TestNormalizeFactoryIntegration:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
             output = run_onboarded_pipeline(
@@ -269,8 +269,8 @@ class TestMetadataTracking:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
             output = run_onboarded_pipeline(
@@ -287,8 +287,8 @@ class TestMetadataTracking:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
             output = run_onboarded_pipeline(
@@ -304,13 +304,13 @@ class TestAgentChaining:
     """Test correct chaining and ordering of agents."""
 
     def test_onboarded_pipeline_intent_agent_receives_situation_text(self):
-        """Verify IntentAgent receives situation_text."""
+        """Verify IntentAgent receives situation_text and factory context."""
         with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
             situation = "rush job J1"
@@ -319,18 +319,22 @@ class TestAgentChaining:
                 situation_text=situation
             )
 
-            # IntentAgent should be called with situation_text
-            mock_intent.assert_called_once_with(situation)
+            # IntentAgent should be called with situation_text and factory (kwarg)
+            # Now passes factory context as keyword argument
+            assert mock_intent.called
+            call_args = mock_intent.call_args
+            assert call_args[0][0] == situation  # First arg is situation_text
+            assert 'factory' in call_args[1]  # factory passed as kwarg
 
     def test_onboarded_pipeline_futures_agent_receives_intent_spec(self):
-        """Verify FuturesAgent receives the spec from IntentAgent."""
+        """Verify FuturesAgent receives the spec from IntentAgent and factory context."""
         with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             intent_spec = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_intent.return_value = intent_spec
-            mock_futures.return_value = [intent_spec]
+            mock_intent.return_value = (intent_spec, "test context")
+            mock_futures.return_value = ([intent_spec], "test justification")
             mock_briefing.return_value = "# Test"
 
             run_onboarded_pipeline(
@@ -338,8 +342,11 @@ class TestAgentChaining:
                 situation_text="test"
             )
 
-            # FuturesAgent should be called with the intent spec
-            mock_futures.assert_called_once_with(intent_spec)
+            # FuturesAgent should be called with the intent spec and factory context
+            assert mock_futures.called
+            call_args = mock_futures.call_args
+            assert call_args[0][0] == intent_spec  # First arg is the spec
+            assert 'factory' in call_args[1]  # factory passed as kwarg
 
     def test_onboarded_pipeline_briefing_agent_receives_primary_metrics(self):
         """Verify BriefingAgent receives the primary scenario's metrics."""
@@ -347,8 +354,8 @@ class TestAgentChaining:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
             run_onboarded_pipeline(
@@ -371,8 +378,8 @@ class TestDeterminism:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Deterministic Briefing"
 
             factory_text = "test factory"
@@ -403,8 +410,8 @@ class TestErrorHandling:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = []  # Empty list
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([], "test justification")  # Empty list
             mock_briefing.return_value = "# Test"
 
             with pytest.raises(RuntimeError, match="FuturesAgent returned no scenarios"):
@@ -419,8 +426,8 @@ class TestErrorHandling:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
             outputs = []
@@ -451,8 +458,8 @@ class TestMultipleScenarios:
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([
                 ScenarioSpec(scenario_type=ScenarioType.BASELINE),
                 ScenarioSpec(
                     scenario_type=ScenarioType.RUSH_ARRIVES,
@@ -464,7 +471,7 @@ class TestMultipleScenarios:
                     rush_job_id=None,
                     slowdown_factor=2,
                 ),
-            ]
+            ], "test justification")
             mock_briefing.return_value = "# Briefing"
 
             output = run_onboarded_pipeline(
@@ -489,8 +496,8 @@ class TestIntegrationWithSimulation:
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             # Only mock the agents, let sim and metrics run for real
-            mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-            mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test Briefing"
 
             output = run_onboarded_pipeline(
