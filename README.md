@@ -166,6 +166,46 @@ pytest tests/test_sim_baseline.py -v
 pytest tests/ --cov=. --cov-report=html
 ```
 
+## Development Setup
+
+### Backend (Python)
+
+The backend is the simulation engine with LLM agents. Set it up as described above:
+
+```bash
+# Install dependencies
+pip install -U openai pydantic pytest
+
+# Set your OpenAI API key
+export OPENAI_API_KEY="sk-..."
+
+# Run tests
+python -m pytest
+
+# Run CLI
+python -m main "your factory situation here"
+```
+
+### Frontend (React + Vite)
+
+The frontend is a React application built with Vite and TypeScript. To run the frontend dev server:
+
+```bash
+# Navigate to frontend directory
+cd frontend
+
+# Install dependencies
+npm install   # or pnpm install / yarn install
+
+# Start dev server (opens at http://localhost:5173)
+npm run dev
+
+# Build for production
+npm run build
+```
+
+**Note**: The frontend currently uses mock data and does not call any backend endpoints. Full API integration will be added in future PRs.
+
 ## How It Works
 
 ### The Toy Factory
