@@ -17,15 +17,19 @@ function App() {
   const [situation, setSituation] = useState(DEFAULT_SITUATION);
   const [result, setResult] = useState<SimulateResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSimulate = async () => {
     setLoading(true);
+    setError(null);
     try {
       const response = await simulate(factoryDescription, situation);
       setResult(response);
       console.log('Simulation complete:', response);
-    } catch (error) {
-      console.error('Simulation failed:', error);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not reach simulation server';
+      setError(message);
+      console.error('Simulation failed:', err);
     } finally {
       setLoading(false);
     }
@@ -73,6 +77,13 @@ function App() {
             {loading ? 'Simulating...' : 'Simulate'}
           </button>
         </section>
+
+        {/* Error Banner */}
+        {error && (
+          <div className="error-banner">
+            Error: {error}
+          </div>
+        )}
 
         {/* Output Panels */}
         {result && (
