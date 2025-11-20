@@ -1,24 +1,29 @@
 """
 Agentic Interpretation Layer
 
-This module defines three LLM-backed agents that form the agentic boundaries:
+This module defines LLM-backed and stub agents that form the agentic boundaries:
 
-1. IntentAgent: Maps free-form user text to a ScenarioSpec
+1. OnboardingAgent: Maps free-text factory description to a FactoryConfig
+   - Input: factory_text (free-form user description)
+   - Output: FactoryConfig
+   - In PR1: stub that returns build_toy_factory() (no LLM yet)
+
+2. IntentAgent: Maps free-form user text to a ScenarioSpec
    - Input: user text
    - Output: ScenarioSpec
    - Uses LLM with fallback to BASELINE on error
 
-2. FuturesAgent: Expands a ScenarioSpec into a list of candidate scenarios
+3. FuturesAgent: Expands a ScenarioSpec into a list of candidate scenarios
    - Input: ScenarioSpec
    - Output: list[ScenarioSpec]
    - Uses LLM with fallback to [spec] on error
 
-3. BriefingAgent: Translates ScenarioMetrics to markdown summary
+4. BriefingAgent: Translates ScenarioMetrics to markdown summary
    - Input: ScenarioMetrics, optional context string
    - Output: markdown string
    - Uses LLM with fallback to deterministic template on error
 
-All agents call llm.call_llm_json for LLM communication.
+All agents except OnboardingAgent call llm.call_llm_json for LLM communication.
 Tests will monkeypatch call_llm_json to avoid real network calls.
 """
 
@@ -31,6 +36,39 @@ from world import build_toy_factory
 from llm import call_llm_json
 
 logger = logging.getLogger(__name__)
+
+
+class OnboardingAgent:
+    """Stub onboarding agent for factory description parsing.
+
+    In PR1 this does NOT call any LLM. It will be upgraded later to interpret
+    free-text factory descriptions and return a FactoryConfig. For now, it
+    simply returns the toy factory.
+    """
+
+    def run(self, factory_text: str) -> FactoryConfig:
+        """
+        Parse factory text into a FactoryConfig (stub version, no LLM).
+
+        In PR1:
+        - If factory_text is empty, return build_toy_factory()
+        - If factory_text is non-empty, log and return build_toy_factory()
+
+        Args:
+            factory_text: Free-form factory description (ignored in stub)
+
+        Returns:
+            FactoryConfig (currently always the toy factory)
+        """
+        if not factory_text.strip():
+            logger.info("OnboardingAgent: empty factory_text; returning toy factory")
+            return build_toy_factory()
+
+        logger.info(
+            "OnboardingAgent stub used; ignoring custom factory_text for now. "
+            "Will be upgraded with LLM parsing in a future PR."
+        )
+        return build_toy_factory()
 
 
 def normalize_scenario_spec(spec: ScenarioSpec, factory: FactoryConfig) -> ScenarioSpec:
