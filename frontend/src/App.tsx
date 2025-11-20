@@ -42,10 +42,15 @@ function App() {
       </header>
 
       <main className="app-main">
+        {/* Instructions */}
+        <p className="instructions">
+          1) Describe your factory on the left. 2) Describe today&apos;s situation on the right. 3) Click &quot;Simulate&quot; to see scenarios and a decision briefing.
+        </p>
+
         {/* Input Section */}
         <section className="input-section">
           <div className="textarea-group">
-            <label htmlFor="factory-desc">Factory Description</label>
+            <label htmlFor="factory-desc">Factory Description (machines, jobs, routing)</label>
             <textarea
               id="factory-desc"
               value={factoryDescription}
@@ -56,7 +61,7 @@ function App() {
           </div>
 
           <div className="textarea-group">
-            <label htmlFor="situation">Today's Situation / Priorities</label>
+            <label htmlFor="situation">Today's Situation / Priorities (rush orders, slowdowns, constraints)</label>
             <textarea
               id="situation"
               value={situation}
@@ -155,7 +160,7 @@ function App() {
             {/* Briefing Panel */}
             <section className="panel briefing-panel">
               <h2>Decision Briefing</h2>
-              <div className="panel-content briefing-content">
+              <div className="briefing-content">
                 <div
                   className="briefing-text"
                   dangerouslySetInnerHTML={{
