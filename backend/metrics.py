@@ -15,7 +15,7 @@ Metrics computed:
 
 import logging
 from collections import defaultdict
-from models import FactoryConfig, SimulationResult, ScenarioMetrics
+from .models import FactoryConfig, SimulationResult, ScenarioMetrics
 
 logger = logging.getLogger(__name__)
 

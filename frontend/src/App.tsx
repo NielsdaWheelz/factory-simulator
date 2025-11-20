@@ -137,21 +137,27 @@ function App() {
                     <tr>
                       <th>Scenario</th>
                       <th>Makespan (h)</th>
-                      <th>Total Lateness (h)</th>
+                      <th>Late Jobs</th>
                       <th>Bottleneck Machine</th>
                       <th>Bottleneck Util.</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {result.metrics.map((metric) => (
-                      <tr key={metric.scenario_name}>
-                        <td>{metric.scenario_name}</td>
-                        <td>{metric.makespan_hour.toFixed(2)}</td>
-                        <td>{metric.total_lateness_hours.toFixed(2)}</td>
-                        <td>{metric.bottleneck_machine_id}</td>
-                        <td>{(metric.bottleneck_utilization * 100).toFixed(0)}%</td>
-                      </tr>
-                    ))}
+                    {result.specs.map((spec, idx) => {
+                      const metric = result.metrics[idx];
+                      const lateJobs = Object.entries(metric.job_lateness)
+                        .filter(([_, lateness]) => lateness > 0)
+                        .map(([jobId]) => jobId);
+                      return (
+                        <tr key={idx}>
+                          <td>{spec.scenario_type}</td>
+                          <td>{metric.makespan_hour.toFixed(2)}</td>
+                          <td>{lateJobs.length > 0 ? lateJobs.join(', ') : 'None'}</td>
+                          <td>{metric.bottleneck_machine_id}</td>
+                          <td>{(metric.bottleneck_utilization * 100).toFixed(0)}%</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

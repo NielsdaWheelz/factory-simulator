@@ -19,12 +19,12 @@ The run_onboarded_pipeline function extends this pipeline to support:
 """
 
 import logging
-from world import build_toy_factory
-from sim import simulate
-from metrics import compute_metrics
-from agents import IntentAgent, FuturesAgent, BriefingAgent, OnboardingAgent
-from models import FactoryConfig, ScenarioSpec, SimulationResult, ScenarioMetrics
-from onboarding import normalize_factory
+from .world import build_toy_factory
+from .sim import simulate
+from .metrics import compute_metrics
+from .agents import IntentAgent, FuturesAgent, BriefingAgent, OnboardingAgent
+from .models import FactoryConfig, ScenarioSpec, SimulationResult, ScenarioMetrics
+from .onboarding import normalize_factory
 
 logger = logging.getLogger(__name__)
 
@@ -59,66 +59,72 @@ def run_pipeline(user_text: str) -> dict:
         RuntimeError: If FuturesAgent returns no scenarios.
     """
     # Log incoming user text (truncated for safety)
-    logger.info("run_pipeline user_text=%r", user_text[:200])
+    logger.info("=" * 80)
+    logger.info("📋 run_pipeline started")
+    logger.info(f"   User text: {user_text[:100]}{'...' if len(user_text) > 100 else ''}")
+    logger.info("=" * 80)
 
     # Step 1: Build the baseline factory config
+    logger.info("Step 1️⃣ Building baseline factory config...")
     factory: FactoryConfig = build_toy_factory()
+    logger.info(f"   ✓ Factory built: {len(factory.machines)} machines, {len(factory.jobs)} jobs")
 
     # Initialize agents
+    logger.info("Step 2️⃣ Initializing agents...")
     intent_agent = IntentAgent()
     futures_agent = FuturesAgent()
     briefing_agent = BriefingAgent()
+    logger.info("   ✓ Agents initialized")
 
     # Step 2: Use IntentAgent to parse user text into a base ScenarioSpec
+    logger.info("Step 3️⃣ Running IntentAgent (parsing user text → scenario intent)...")
     base_spec: ScenarioSpec = intent_agent.run(user_text)
+    logger.info(f"   ✓ IntentAgent result: {base_spec.scenario_type.value}")
 
     # Step 3: Use FuturesAgent to expand into candidate scenarios
+    logger.info("Step 4️⃣ Running FuturesAgent (expanding to candidate scenarios)...")
     specs = futures_agent.run(base_spec)
+    logger.info(f"   ✓ FuturesAgent generated {len(specs)} scenarios")
     if not specs:
         # Guard against empty list (though fallback in FuturesAgent should prevent this)
+        logger.error("❌ FuturesAgent returned no scenarios!")
         raise RuntimeError("FuturesAgent returned no scenarios.")
 
-    # Log base spec and number of specs
-    logger.info(
-        "base_spec: type=%s rush_job_id=%s slowdown_factor=%s",
-        base_spec.scenario_type,
-        base_spec.rush_job_id,
-        base_spec.slowdown_factor,
-    )
-    logger.info("number of scenario specs from FuturesAgent: %d", len(specs))
-
     # Step 4: For each scenario, run simulation and compute metrics
+    logger.info("Step 5️⃣ Running simulations for each scenario...")
     results: list[SimulationResult] = []
     metrics_list: list[ScenarioMetrics] = []
 
     for i, spec in enumerate(specs):
+        logger.info(f"   [Scenario {i+1}/{len(specs)}] Running simulation...")
         # Run simulation
         result: SimulationResult = simulate(factory, spec)
         results.append(result)
 
         # Compute metrics
+        logger.info(f"   [Scenario {i+1}/{len(specs)}] Computing metrics...")
         metrics: ScenarioMetrics = compute_metrics(factory, result)
         metrics_list.append(metrics)
 
         # Log scenario metrics
         late_jobs = sum(1 for v in metrics.job_lateness.values() if v > 0)
         logger.info(
-            "scenario[%d]: type=%s rush_job_id=%s slowdown_factor=%s makespan=%d late_jobs=%d bottleneck=%s util=%.3f",
-            i,
-            spec.scenario_type,
-            spec.rush_job_id,
-            spec.slowdown_factor,
-            metrics.makespan_hour,
-            late_jobs,
-            metrics.bottleneck_machine_id,
-            metrics.bottleneck_utilization,
+            f"   [Scenario {i+1}/{len(specs)}] ✓ Complete: "
+            f"type={spec.scenario_type.value} "
+            f"makespan={metrics.makespan_hour}h "
+            f"late_jobs={late_jobs} "
+            f"bottleneck={metrics.bottleneck_machine_id} "
+            f"util={metrics.bottleneck_utilization:.1%}"
         )
 
     # Step 5: Choose primary scenario (first in list)
+    logger.info("Step 6️⃣ Selecting primary scenario...")
     primary_spec = specs[0]
     primary_metrics = metrics_list[0]
+    logger.info(f"   ✓ Primary scenario: {primary_spec.scenario_type.value}")
 
     # Step 6: Build context summary for BriefingAgent with user_text and scenarios
+    logger.info("Step 7️⃣ Building context summary for briefing...")
     context_lines = [f"User Request: {user_text}", ""]
     context_lines.append("You evaluated the following scenarios:")
     for i, (spec, metrics) in enumerate(zip(specs, metrics_list), start=1):
@@ -133,9 +139,16 @@ def run_pipeline(user_text: str) -> dict:
         context_lines.append(scenario_desc)
 
     context = "\n".join(context_lines)
+    logger.info(f"   ✓ Context built ({len(context)} chars)")
 
     # Step 7: Generate briefing with primary metrics and context
+    logger.info("Step 8️⃣ Running BriefingAgent (generating markdown summary)...")
     briefing: str = briefing_agent.run(primary_metrics, context=context)
+    logger.info(f"   ✓ Briefing generated ({len(briefing)} chars)")
+
+    logger.info("=" * 80)
+    logger.info("✅ run_pipeline completed successfully!")
+    logger.info("=" * 80)
 
     # Return all outputs
     return {
@@ -187,27 +200,28 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
         RuntimeError: If FuturesAgent returns no scenarios.
     """
     # Log incoming text (truncated for safety)
-    logger.info(
-        "run_onboarded_pipeline factory_text=%r situation_text=%r",
-        factory_text[:100],
-        situation_text[:200],
-    )
+    logger.info("=" * 80)
+    logger.info("🔧 run_onboarded_pipeline started")
+    logger.info(f"   Factory text: {factory_text[:80]}{'...' if len(factory_text) > 80 else ''}")
+    logger.info(f"   Situation text: {situation_text[:100]}{'...' if len(situation_text) > 100 else ''}")
+    logger.info("=" * 80)
 
     # Step 1: Instantiate OnboardingAgent and get initial factory config
+    logger.info("Step 1️⃣ Running OnboardingAgent (parsing factory description)...")
     onboarding_agent = OnboardingAgent()
     initial_factory = onboarding_agent.run(factory_text)
     logger.info(
-        "OnboardingAgent returned factory with %d machines and %d jobs",
-        len(initial_factory.machines),
-        len(initial_factory.jobs),
+        f"   ✓ OnboardingAgent returned factory: {len(initial_factory.machines)} machines, {len(initial_factory.jobs)} jobs"
     )
 
     # Step 2: Normalize the factory
+    logger.info("Step 2️⃣ Normalizing factory configuration...")
     normalized_factory = normalize_factory(initial_factory)
 
     # Track if we used the default factory (either from stub or fallback)
     # In PR1, the stub always returns toy factory, so this is always True initially
     # After normalization, check if we got the toy factory as a result
+    logger.info("   Computing if default factory was used...")
     toy_factory = build_toy_factory()
     used_default_factory = (
         (len(normalized_factory.machines) == len(toy_factory.machines))
@@ -223,64 +237,68 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
     )
 
     logger.info(
-        "normalize_factory returned factory with %d machines and %d jobs",
-        len(normalized_factory.machines),
-        len(normalized_factory.jobs),
+        f"   ✓ Factory normalized: {len(normalized_factory.machines)} machines, {len(normalized_factory.jobs)} jobs "
+        f"(used_default={used_default_factory})"
     )
 
     # Step 3: Initialize agents (except OnboardingAgent which we already used)
+    logger.info("Step 3️⃣ Initializing agents...")
     intent_agent = IntentAgent()
     futures_agent = FuturesAgent()
     briefing_agent = BriefingAgent()
+    logger.info("   ✓ Agents initialized")
 
     # Step 4: Use IntentAgent to parse situation text into a base ScenarioSpec
+    logger.info("Step 4️⃣ Running IntentAgent (parsing situation text → scenario intent)...")
     base_spec = intent_agent.run(situation_text)
     logger.info(
-        "IntentAgent parsed situation: type=%s rush_job_id=%s slowdown_factor=%s",
-        base_spec.scenario_type,
-        base_spec.rush_job_id,
-        base_spec.slowdown_factor,
+        f"   ✓ IntentAgent result: type={base_spec.scenario_type.value}"
     )
 
     # Step 5: Use FuturesAgent to expand into candidate scenarios
+    logger.info("Step 5️⃣ Running FuturesAgent (expanding to candidate scenarios)...")
     specs = futures_agent.run(base_spec)
     if not specs:
+        logger.error("❌ FuturesAgent returned no scenarios!")
         raise RuntimeError("FuturesAgent returned no scenarios.")
 
-    logger.info("FuturesAgent expanded to %d scenario(s)", len(specs))
+    logger.info(f"   ✓ FuturesAgent generated {len(specs)} scenarios")
 
     # Step 6: For each scenario, run simulation and compute metrics
+    logger.info("Step 6️⃣ Running simulations for each scenario...")
     results: list[SimulationResult] = []
     metrics_list: list[ScenarioMetrics] = []
 
     for i, spec in enumerate(specs):
+        logger.info(f"   [Scenario {i+1}/{len(specs)}] Running simulation...")
         # Run simulation
         result: SimulationResult = simulate(normalized_factory, spec)
         results.append(result)
 
         # Compute metrics
+        logger.info(f"   [Scenario {i+1}/{len(specs)}] Computing metrics...")
         metrics: ScenarioMetrics = compute_metrics(normalized_factory, result)
         metrics_list.append(metrics)
 
         # Log scenario metrics
         late_jobs = sum(1 for v in metrics.job_lateness.values() if v > 0)
         logger.info(
-            "scenario[%d]: type=%s rush_job_id=%s slowdown_factor=%s makespan=%d late_jobs=%d bottleneck=%s util=%.3f",
-            i,
-            spec.scenario_type,
-            spec.rush_job_id,
-            spec.slowdown_factor,
-            metrics.makespan_hour,
-            late_jobs,
-            metrics.bottleneck_machine_id,
-            metrics.bottleneck_utilization,
+            f"   [Scenario {i+1}/{len(specs)}] ✓ Complete: "
+            f"type={spec.scenario_type.value} "
+            f"makespan={metrics.makespan_hour}h "
+            f"late_jobs={late_jobs} "
+            f"bottleneck={metrics.bottleneck_machine_id} "
+            f"util={metrics.bottleneck_utilization:.1%}"
         )
 
     # Step 7: Choose primary scenario (first in list) and generate briefing
+    logger.info("Step 7️⃣ Selecting primary scenario and generating briefing...")
     primary_spec = specs[0]
     primary_metrics = metrics_list[0]
+    logger.info(f"   ✓ Primary scenario: {primary_spec.scenario_type.value}")
 
     # Build context summary for BriefingAgent
+    logger.info("   Building context summary...")
     context_lines = [f"User Request: {situation_text}", ""]
     context_lines.append("You evaluated the following scenarios:")
     for i, (spec, metrics) in enumerate(zip(specs, metrics_list), start=1):
@@ -295,9 +313,19 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
         context_lines.append(scenario_desc)
 
     context = "\n".join(context_lines)
+    logger.info(f"   ✓ Context built ({len(context)} chars)")
 
     # Generate briefing
+    logger.info("Step 8️⃣ Running BriefingAgent (generating markdown summary)...")
     briefing: str = briefing_agent.run(primary_metrics, context=context)
+    logger.info(f"   ✓ Briefing generated ({len(briefing)} chars)")
+
+    logger.info("=" * 80)
+    logger.info("✅ run_onboarded_pipeline completed successfully!")
+    logger.info(f"   Factory: {len(normalized_factory.machines)} machines, {len(normalized_factory.jobs)} jobs")
+    logger.info(f"   Scenarios: {len(specs)}")
+    logger.info(f"   Used default factory: {used_default_factory}")
+    logger.info("=" * 80)
 
     # Return all outputs in the structured format
     return {

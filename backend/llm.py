@@ -14,7 +14,7 @@ from typing import Type, TypeVar
 
 from pydantic import BaseModel
 
-from config import get_openai_api_key, OPENAI_MODEL
+from .config import get_openai_api_key, OPENAI_MODEL
 
 logger = logging.getLogger(__name__)
 

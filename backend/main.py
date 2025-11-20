@@ -13,7 +13,7 @@ Usage:
 
 import argparse
 import logging
-from orchestrator import run_pipeline
+from .orchestrator import run_pipeline
 
 
 def main() -> int:

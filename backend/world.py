@@ -8,7 +8,7 @@ This module defines the toy factory world:
 - Shared bottleneck on M2 creating realistic scheduling conflicts
 """
 
-from models import FactoryConfig, Machine, Job, Step
+from .models import FactoryConfig, Machine, Job, Step
 
 
 def build_toy_factory() -> FactoryConfig:

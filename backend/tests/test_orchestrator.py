@@ -11,9 +11,9 @@ Ensures:
 import pytest
 from unittest.mock import patch
 
-from orchestrator import run_pipeline
-from models import ScenarioSpec, ScenarioType, SimulationResult, ScenarioMetrics, FactoryConfig
-from agents import FuturesResponse, BriefingResponse
+from backend.orchestrator import run_pipeline
+from backend.models import ScenarioSpec, ScenarioType, SimulationResult, ScenarioMetrics, FactoryConfig
+from backend.agents import FuturesResponse, BriefingResponse
 
 
 class TestRunPipelineStructure:
@@ -22,9 +22,9 @@ class TestRunPipelineStructure:
     def test_run_pipeline_baseline_structure(self):
         """Verify pipeline returns expected dict structure with correct types."""
         # Mock LLM to return deterministic scenarios
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             # Return single BASELINE scenario
             mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
@@ -62,9 +62,9 @@ class TestRunPipelineStructure:
 
     def test_run_pipeline_multiple_scenarios(self):
         """Verify pipeline handles multiple scenarios correctly."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
             # Return 3 scenarios
@@ -92,9 +92,9 @@ class TestRunPipelineStructure:
 
     def test_run_pipeline_results_and_metrics_aligned(self):
         """Verify that results and metrics are aligned with specs."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
             mock_futures.return_value = [
@@ -121,9 +121,9 @@ class TestRunPipelineStructure:
 
     def test_run_pipeline_briefing_contains_key_sections(self):
         """Verify briefing markdown contains expected sections."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
             mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
@@ -138,9 +138,9 @@ class TestRunPipelineStructure:
 
     def test_run_pipeline_factory_has_expected_config(self):
         """Verify factory has machines and jobs from toy factory."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
             mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
@@ -164,9 +164,9 @@ class TestDeterminism:
 
     def test_run_pipeline_deterministic_basic(self):
         """Verify same input produces identical outputs with mocked agents."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
             mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
@@ -187,9 +187,9 @@ class TestDeterminism:
 
     def test_run_pipeline_deterministic_multiple_scenarios(self):
         """Verify determinism with multiple scenarios."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
             mock_futures.return_value = [
@@ -215,9 +215,9 @@ class TestDeterminism:
 
     def test_run_pipeline_deterministic_briefing(self):
         """Verify briefing is deterministic with mocked agents."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             expected_briefing = "# Deterministic Briefing\n\nSame output every time."
 
@@ -239,9 +239,9 @@ class TestPipelineIntegration:
 
     def test_run_pipeline_end_to_end_with_mocked_agents(self):
         """Verify pipeline works end-to-end with mocked agents."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
             mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
@@ -254,9 +254,9 @@ class TestPipelineIntegration:
 
     def test_run_pipeline_end_to_end_with_multiple_scenarios(self):
         """Verify pipeline works with multiple scenarios."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
             mock_futures.return_value = [
@@ -284,9 +284,9 @@ class TestPipelineIntegration:
 
     def test_run_pipeline_metrics_match_results(self):
         """Verify metrics are computed correctly from each result."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
             mock_futures.return_value = [
@@ -315,9 +315,9 @@ class TestPipelineIntegration:
 
     def test_run_pipeline_factory_never_mutated(self):
         """Verify that run_pipeline doesn't mutate the toy factory definition."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
             mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
@@ -350,9 +350,9 @@ class TestEdgeCases:
 
     def test_run_pipeline_with_special_characters(self):
         """Verify pipeline handles special characters in text."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
             mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
@@ -371,9 +371,9 @@ class TestEdgeCases:
 
     def test_run_pipeline_output_immutability(self):
         """Verify output structure doesn't affect subsequent calls."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             mock_intent.return_value = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
             mock_futures.return_value = [ScenarioSpec(scenario_type=ScenarioType.BASELINE)]
@@ -394,9 +394,9 @@ class TestEdgeCases:
 
     def test_run_pipeline_with_fallback_scenarios(self):
         """Verify pipeline handles fallback when FuturesAgent fails."""
-        with patch("orchestrator.IntentAgent.run") as mock_intent, \
-             patch("orchestrator.FuturesAgent.run") as mock_futures, \
-             patch("orchestrator.BriefingAgent.run") as mock_briefing:
+        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
             base_spec = ScenarioSpec(
                 scenario_type=ScenarioType.RUSH_ARRIVES,

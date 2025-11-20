@@ -9,9 +9,9 @@ All network calls are mocked; no real OpenAI API key is required.
 import pytest
 from unittest.mock import patch, MagicMock
 
-from models import ScenarioSpec, ScenarioType, ScenarioMetrics
-from agents import IntentAgent, FuturesAgent, BriefingAgent, FuturesResponse, BriefingResponse, normalize_scenario_spec
-from world import build_toy_factory
+from backend.models import ScenarioSpec, ScenarioType, ScenarioMetrics
+from backend.agents import IntentAgent, FuturesAgent, BriefingAgent, FuturesResponse, BriefingResponse, normalize_scenario_spec
+from backend.world import build_toy_factory
 
 
 class TestNormalizeScenarioSpec:
@@ -130,7 +130,7 @@ class TestIntentAgentWithMockedLLM:
             slowdown_factor=None,
         )
 
-        with patch("agents.call_llm_json", return_value=expected_spec):
+        with patch("backend.agents.call_llm_json", return_value=expected_spec):
             agent = IntentAgent()
             result = agent.run("we have a rush order for J2")
 
@@ -146,7 +146,7 @@ class TestIntentAgentWithMockedLLM:
             slowdown_factor=3,
         )
 
-        with patch("agents.call_llm_json", return_value=expected_spec):
+        with patch("backend.agents.call_llm_json", return_value=expected_spec):
             agent = IntentAgent()
             result = agent.run("machine M2 is having issues")
 
@@ -162,7 +162,7 @@ class TestIntentAgentWithMockedLLM:
             slowdown_factor=None,
         )
 
-        with patch("agents.call_llm_json", return_value=expected_spec):
+        with patch("backend.agents.call_llm_json", return_value=expected_spec):
             agent = IntentAgent()
             result = agent.run("just a normal day")
 
@@ -172,7 +172,7 @@ class TestIntentAgentWithMockedLLM:
 
     def test_intent_agent_fallback_on_llm_failure(self):
         """Test that IntentAgent falls back to BASELINE when LLM call fails."""
-        with patch("agents.call_llm_json", side_effect=RuntimeError("API error")):
+        with patch("backend.agents.call_llm_json", side_effect=RuntimeError("API error")):
             agent = IntentAgent()
             result = agent.run("some text")
 
@@ -184,7 +184,7 @@ class TestIntentAgentWithMockedLLM:
     def test_intent_agent_fallback_on_validation_error(self):
         """Test that IntentAgent falls back when LLM response validation fails."""
         # Raise a validation error during model_validate
-        with patch("agents.call_llm_json", side_effect=ValueError("Invalid scenario")):
+        with patch("backend.agents.call_llm_json", side_effect=ValueError("Invalid scenario")):
             agent = IntentAgent()
             result = agent.run("some text")
 
@@ -201,7 +201,7 @@ class TestIntentAgentWithMockedLLM:
             slowdown_factor=2,
         )
 
-        with patch("agents.call_llm_json", return_value=invalid_spec):
+        with patch("backend.agents.call_llm_json", return_value=invalid_spec):
             agent = IntentAgent()
             result = agent.run("M2 is slow and J1 needs rushing")
 
@@ -219,7 +219,7 @@ class TestIntentAgentWithMockedLLM:
             slowdown_factor=None,
         )
 
-        with patch("agents.call_llm_json", return_value=invalid_spec):
+        with patch("backend.agents.call_llm_json", return_value=invalid_spec):
             agent = IntentAgent()
             result = agent.run("rush order for J99")
 
@@ -252,7 +252,7 @@ class TestFuturesAgentWithMockedLLM:
 
         base_spec = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
 
-        with patch("agents.call_llm_json", return_value=expected_response):
+        with patch("backend.agents.call_llm_json", return_value=expected_response):
             agent = FuturesAgent()
             result = agent.run(base_spec)
 
@@ -273,7 +273,7 @@ class TestFuturesAgentWithMockedLLM:
 
         base_spec = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
 
-        with patch("agents.call_llm_json", return_value=expected_response):
+        with patch("backend.agents.call_llm_json", return_value=expected_response):
             agent = FuturesAgent()
             result = agent.run(base_spec)
 
@@ -311,7 +311,7 @@ class TestFuturesAgentWithMockedLLM:
 
         base_spec = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
 
-        with patch("agents.call_llm_json", return_value=expected_response):
+        with patch("backend.agents.call_llm_json", return_value=expected_response):
             agent = FuturesAgent()
             result = agent.run(base_spec)
 
@@ -326,7 +326,7 @@ class TestFuturesAgentWithMockedLLM:
             slowdown_factor=2,
         )
 
-        with patch("agents.call_llm_json", side_effect=RuntimeError("API error")):
+        with patch("backend.agents.call_llm_json", side_effect=RuntimeError("API error")):
             agent = FuturesAgent()
             result = agent.run(base_spec)
 
@@ -340,7 +340,7 @@ class TestFuturesAgentWithMockedLLM:
 
         base_spec = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
 
-        with patch("agents.call_llm_json", return_value=expected_response):
+        with patch("backend.agents.call_llm_json", return_value=expected_response):
             agent = FuturesAgent()
             result = agent.run(base_spec)
 
@@ -379,7 +379,7 @@ This is a single-day deterministic model with no real disruptions."""
             bottleneck_utilization=0.85,
         )
 
-        with patch("agents.call_llm_json", return_value=expected_response):
+        with patch("backend.agents.call_llm_json", return_value=expected_response):
             agent = BriefingAgent()
             result = agent.run(metrics)
 
@@ -401,7 +401,7 @@ This is a single-day deterministic model with no real disruptions."""
 
         context = "Other scenarios: Rush scenario has J1 late by 3h."
 
-        with patch("agents.call_llm_json", return_value=expected_response) as mock_llm:
+        with patch("backend.agents.call_llm_json", return_value=expected_response) as mock_llm:
             agent = BriefingAgent()
             result = agent.run(metrics, context=context)
 
@@ -421,7 +421,7 @@ This is a single-day deterministic model with no real disruptions."""
             bottleneck_utilization=0.85,
         )
 
-        with patch("agents.call_llm_json", side_effect=RuntimeError("API error")):
+        with patch("backend.agents.call_llm_json", side_effect=RuntimeError("API error")):
             agent = BriefingAgent()
             result = agent.run(metrics)
 
@@ -441,7 +441,7 @@ This is a single-day deterministic model with no real disruptions."""
             bottleneck_utilization=0.85,
         )
 
-        with patch("agents.call_llm_json", side_effect=ValueError("Invalid response")):
+        with patch("backend.agents.call_llm_json", side_effect=ValueError("Invalid response")):
             agent = BriefingAgent()
             result = agent.run(metrics)
 
@@ -461,7 +461,7 @@ This is a single-day deterministic model with no real disruptions."""
             bottleneck_utilization=0.85,
         )
 
-        with patch("agents.call_llm_json", return_value=expected_response):
+        with patch("backend.agents.call_llm_json", return_value=expected_response):
             agent = BriefingAgent()
             result = agent.run(metrics)  # No context parameter
 
@@ -479,7 +479,7 @@ class TestAgentDeterminism:
             slowdown_factor=None,
         )
 
-        with patch("agents.call_llm_json", return_value=expected_spec):
+        with patch("backend.agents.call_llm_json", return_value=expected_spec):
             agent = IntentAgent()
 
             result1 = agent.run("rush order for J2")
@@ -502,7 +502,7 @@ class TestAgentDeterminism:
 
         base_spec = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
 
-        with patch("agents.call_llm_json", return_value=expected_response):
+        with patch("backend.agents.call_llm_json", return_value=expected_response):
             agent = FuturesAgent()
 
             result1 = agent.run(base_spec)
@@ -522,7 +522,7 @@ class TestAgentDeterminism:
             bottleneck_utilization=0.85,
         )
 
-        with patch("agents.call_llm_json", return_value=expected_response):
+        with patch("backend.agents.call_llm_json", return_value=expected_response):
             agent = BriefingAgent()
 
             result1 = agent.run(metrics)
