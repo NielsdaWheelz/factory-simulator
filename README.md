@@ -186,6 +186,33 @@ python -m pytest
 python -m main "your factory situation here"
 ```
 
+### Backend API (FastAPI)
+
+The backend exposes a REST API via FastAPI for running simulations with custom factory configs:
+
+```bash
+# Install FastAPI and Uvicorn
+pip install fastapi uvicorn
+
+# Start the API server
+uvicorn server:app --reload
+
+# Server runs at http://localhost:8000
+# API documentation available at http://localhost:8000/docs
+```
+
+**Endpoint**: `POST /api/simulate`
+
+Request body:
+```json
+{
+  "factory_description": "3 machines, 3 jobs",
+  "situation_text": "normal day"
+}
+```
+
+Response: JSON object with `factory`, `specs`, `metrics`, `briefing`, and `meta`.
+
 ### Frontend (React + Vite)
 
 The frontend is a React application built with Vite and TypeScript. To run the frontend dev server:
@@ -204,7 +231,7 @@ npm run dev
 npm run build
 ```
 
-**Note**: The frontend currently uses mock data and does not call any backend endpoints. Full API integration will be added in future PRs.
+**Note**: The frontend can call `http://localhost:8000/api/simulate` once both the backend API and frontend dev servers are running.
 
 ## How It Works
 
