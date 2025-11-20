@@ -196,148 +196,149 @@ def run_pipeline(user_text: str) -> dict:
     }
 
 
-def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
-    """Run the full simulation pipeline with onboarded factory config.
-
-    This is an extension of run_pipeline that:
-    1. Uses OnboardingAgent to parse factory_text into a FactoryConfig
-    2. Normalizes the factory using normalize_factory
-    3. Runs the multi-agent + simulation pipeline using the normalized factory
-    4. Returns a structured dict with factory, specs, metrics, briefing, and metadata
+def run_onboarding(factory_text: str) -> tuple[FactoryConfig, OnboardingMeta]:
+    """Run onboarding pipeline: parse and normalize factory description.
 
     Steps:
-    1. Instantiate OnboardingAgent and call its run(factory_text) to get a FactoryConfig
-    2. Normalize the config with normalize_factory()
-    3. Run IntentAgent to parse situation_text into a base ScenarioSpec
-    4. Use FuturesAgent to expand into candidate scenarios
-    5. For each ScenarioSpec:
-       - Run simulate(factory, spec)
-       - Run compute_metrics(factory, result)
-    6. Use BriefingAgent to produce markdown briefing
-    7. Return structured dict with factory, specs, metrics, briefing, and metadata
+    1. OnboardingAgent.run(factory_text) → raw FactoryConfig
+    2. normalize_factory(raw_factory) → (normalized_factory, warnings)
+    3. Apply failure ladder:
+       - Level 0 (OK): warnings empty AND factory non-empty
+       - Level 1 (DEGRADED): warnings non-empty AND factory non-empty
+       - Level 2 (FALLBACK): factory has no machines OR no jobs
+    4. Build OnboardingMeta with failure level and errors
+    5. Return (final_factory, meta)
 
     Args:
-        factory_text: Free-text description of factory (passed to OnboardingAgent)
-        situation_text: Free-text description of today's situation
+        factory_text: Free-text factory description
 
     Returns:
-        dict containing:
-            - "factory": FactoryConfig (normalized)
-            - "situation_text": str (the input situation_text)
-            - "specs": list[ScenarioSpec] (all scenarios from FuturesAgent)
-            - "metrics": list[ScenarioMetrics] (one per scenario, same order as specs)
-            - "briefing": str (markdown)
-            - "meta": dict with:
-                - "used_default_factory": bool (True if we fell back to toy factory)
-                - "onboarding_errors": list[str] (empty in PR1)
+        Tuple of (FactoryConfig, OnboardingMeta)
+        - FactoryConfig is normalized or toy factory on fallback
+        - OnboardingMeta tracks fallback status and repair warnings
 
     Raises:
-        RuntimeError: If FuturesAgent returns no scenarios.
+        Nothing; failures are handled internally with fallback
     """
-    # Log incoming text (truncated for safety)
-    logger.info("=" * 80)
-    logger.info("🔧 run_onboarded_pipeline started")
-    logger.info(f"   Factory text: {factory_text[:80]}{'...' if len(factory_text) > 80 else ''}")
-    logger.info(f"   Situation text: {situation_text[:100]}{'...' if len(situation_text) > 100 else ''}")
-    logger.info("=" * 80)
+    logger.debug(f"run_onboarding: factory_text={factory_text[:80]}{'...' if len(factory_text) > 80 else ''}")
 
-    # Step 1: Instantiate OnboardingAgent and get initial factory config
-    logger.info("Step 1️⃣ Running OnboardingAgent (parsing factory description)...")
+    # Step 1: OnboardingAgent parses factory text
     onboarding_agent = OnboardingAgent()
     raw_factory = onboarding_agent.run(factory_text)
-    logger.info(
-        f"   ✓ OnboardingAgent returned factory: {len(raw_factory.machines)} machines, {len(raw_factory.jobs)} jobs"
+    logger.debug(
+        f"   OnboardingAgent: {len(raw_factory.machines)} machines, {len(raw_factory.jobs)} jobs"
     )
 
     # Step 2: Normalize the factory
-    logger.info("Step 2️⃣ Normalizing factory configuration...")
-    normalized_factory, normalization_warnings = normalize_factory(raw_factory)
+    normalized_factory, warnings = normalize_factory(raw_factory)
     logger.debug(
-        f"   After normalization: {len(normalized_factory.machines)} machines, {len(normalized_factory.jobs)} jobs"
+        f"   After normalization: {len(normalized_factory.machines)} machines, "
+        f"{len(normalized_factory.jobs)} jobs, {len(warnings)} warnings"
     )
 
-    # Step 3: Determine fallback level
-    # Fallback is needed if the normalized factory is empty (no machines or no jobs)
+    # Step 3: Apply failure ladder
+    all_errors = warnings.copy()
     if not normalized_factory.machines or not normalized_factory.jobs:
-        logger.debug("Fallback triggered: normalized factory is empty")
+        logger.debug("   Failure level 2 (FALLBACK): normalized factory is empty")
         final_factory = build_toy_factory()
         used_default_factory = True
+        all_errors.append("Normalization resulted in empty factory; falling back to toy factory")
     else:
         final_factory = normalized_factory
-        # Check if the normalized factory is structurally the toy factory
         used_default_factory = is_toy_factory(final_factory)
+        if used_default_factory:
+            logger.debug("   Failure level 1 (DEGRADED): normalized factory is toy factory")
+        elif warnings:
+            logger.debug("   Failure level 1 (DEGRADED): normalized factory has warnings")
+        else:
+            logger.debug("   Failure level 0 (OK): normalized factory is clean")
 
     logger.info(
-        f"   ✓ Factory prepared: {len(final_factory.machines)} machines, {len(final_factory.jobs)} jobs "
-        f"(used_default={used_default_factory})"
+        f"run_onboarding complete: {len(final_factory.machines)} machines, "
+        f"{len(final_factory.jobs)} jobs, used_default={used_default_factory}, "
+        f"errors={len(all_errors)}"
     )
 
-    # Log normalization warnings if any
-    if normalization_warnings:
-        logger.info(f"   Normalization repairs: {len(normalization_warnings)} issue(s)")
-        for warning in normalization_warnings:
-            logger.debug(f"     - {warning}")
+    # Step 4: Build OnboardingMeta
+    meta = OnboardingMeta(
+        used_default_factory=used_default_factory,
+        onboarding_errors=all_errors,
+        inferred_assumptions=[],
+    )
 
-    # Step 3: Initialize agents (except OnboardingAgent which we already used)
-    logger.info("Step 3️⃣ Initializing agents...")
+    return final_factory, meta
+
+
+def run_decision_pipeline(
+    factory: FactoryConfig,
+    situation_text: str,
+    meta: OnboardingMeta,
+) -> dict:
+    """Run decision + simulation pipeline with a given factory and onboarding metadata.
+
+    Steps:
+    1. IntentAgent parses situation_text → ScenarioSpec
+    2. FuturesAgent expands → list of ScenarioSpecs (1-3)
+    3. For each scenario: simulate() + compute_metrics()
+    4. BriefingAgent generates markdown briefing
+    5. Return dict with specs, metrics, briefing, meta, factory
+
+    Args:
+        factory: FactoryConfig to use for all scenarios
+        situation_text: Free-text description of today's situation
+        meta: OnboardingMeta from onboarding phase (threaded through)
+
+    Returns:
+        dict containing:
+            - "factory": FactoryConfig (input factory)
+            - "specs": list[ScenarioSpec] (scenarios from FuturesAgent)
+            - "metrics": list[ScenarioMetrics] (one per scenario)
+            - "briefing": str (markdown)
+            - "meta": OnboardingMeta (input meta, threaded through)
+
+    Raises:
+        RuntimeError: If FuturesAgent returns no scenarios
+    """
+    logger.debug(
+        f"run_decision_pipeline: situation_text={situation_text[:100]}{'...' if len(situation_text) > 100 else ''}"
+    )
+
+    # Initialize agents
     intent_agent = IntentAgent()
     futures_agent = FuturesAgent()
     briefing_agent = BriefingAgent()
-    logger.info("   ✓ Agents initialized")
 
-    # Step 4: Use IntentAgent to parse situation text into a base ScenarioSpec
-    logger.info("Step 4️⃣ Running IntentAgent (parsing situation text → scenario intent)...")
-    base_spec, intent_context = intent_agent.run(situation_text, factory=final_factory)
-    logger.info(
-        f"   ✓ IntentAgent result: type={base_spec.scenario_type.value}"
-    )
-    logger.debug(f"   Intent context: {intent_context}")
+    # Step 1: IntentAgent parses situation text
+    logger.debug("   IntentAgent: parsing situation text...")
+    base_spec, intent_context = intent_agent.run(situation_text, factory=factory)
+    logger.debug(f"   IntentAgent: type={base_spec.scenario_type.value}")
 
-    # Step 5: Use FuturesAgent to expand into candidate scenarios
-    logger.info("Step 5️⃣ Running FuturesAgent (expanding to candidate scenarios)...")
-    specs, futures_context = futures_agent.run(base_spec, factory=final_factory)
+    # Step 2: FuturesAgent expands to candidate scenarios
+    logger.debug("   FuturesAgent: expanding scenarios...")
+    specs, futures_context = futures_agent.run(base_spec, factory=factory)
     if not specs:
-        logger.error("❌ FuturesAgent returned no scenarios!")
+        logger.error("FuturesAgent returned no scenarios!")
         raise RuntimeError("FuturesAgent returned no scenarios.")
+    logger.debug(f"   FuturesAgent: {len(specs)} scenarios")
 
-    logger.info(f"   ✓ FuturesAgent generated {len(specs)} scenarios")
-    logger.debug(f"   Futures context: {futures_context}")
-
-    # Step 6: For each scenario, run simulation and compute metrics
-    logger.info("Step 6️⃣ Running simulations for each scenario...")
+    # Step 3: Run simulation and metrics for each scenario
+    logger.debug("   Running simulations...")
     results: list[SimulationResult] = []
     metrics_list: list[ScenarioMetrics] = []
 
     for i, spec in enumerate(specs):
-        logger.debug(f"   [Scenario {i+1}/{len(specs)}] Running simulation...")
-        # Run simulation
-        result: SimulationResult = simulate(final_factory, spec)
+        result: SimulationResult = simulate(factory, spec)
         results.append(result)
-
-        # Compute metrics
-        logger.debug(f"   [Scenario {i+1}/{len(specs)}] Computing metrics...")
-        metrics: ScenarioMetrics = compute_metrics(final_factory, result)
+        metrics: ScenarioMetrics = compute_metrics(factory, result)
         metrics_list.append(metrics)
-
-        # Log scenario metrics
         late_jobs = sum(1 for v in metrics.job_lateness.values() if v > 0)
-        logger.info(
-            f"   [Scenario {i+1}/{len(specs)}] ✓ Complete: "
-            f"type={spec.scenario_type.value} "
-            f"makespan={metrics.makespan_hour}h "
-            f"late_jobs={late_jobs} "
-            f"bottleneck={metrics.bottleneck_machine_id} "
-            f"util={metrics.bottleneck_utilization:.1%}"
+        logger.debug(
+            f"   [Scenario {i+1}/{len(specs)}] type={spec.scenario_type.value} "
+            f"makespan={metrics.makespan_hour}h late_jobs={late_jobs}"
         )
 
-    # Step 7: Choose primary scenario (first in list) and generate briefing
-    logger.info("Step 7️⃣ Selecting primary scenario and generating briefing...")
-    primary_spec = specs[0]
+    # Step 4: Generate briefing
     primary_metrics = metrics_list[0]
-    logger.info(f"   ✓ Primary scenario: {primary_spec.scenario_type.value}")
-
-    # Build context summary for BriefingAgent
-    logger.info("   Building context summary...")
     context_lines = [f"User Request: {situation_text}", ""]
     context_lines.append("You evaluated the following scenarios:")
     for i, (spec, metrics) in enumerate(zip(specs, metrics_list), start=1):
@@ -352,39 +353,74 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
         context_lines.append(scenario_desc)
 
     context = "\n".join(context_lines)
-    logger.info(f"   ✓ Context built ({len(context)} chars)")
-
-    # Generate briefing with full context
-    logger.info("Step 8️⃣ Running BriefingAgent (generating markdown summary)...")
+    logger.debug(f"   BriefingAgent: generating briefing...")
     briefing: str = briefing_agent.run(
         primary_metrics,
         context=context,
         intent_context=intent_context,
         futures_context=futures_context,
     )
-    logger.info(f"   ✓ Briefing generated ({len(briefing)} chars)")
+    logger.debug(f"   BriefingAgent: {len(briefing)} chars")
 
-    logger.info("=" * 80)
-    logger.info("✅ run_onboarded_pipeline completed successfully!")
-    logger.info(f"   Factory: {len(final_factory.machines)} machines, {len(final_factory.jobs)} jobs")
-    logger.info(f"   Scenarios: {len(specs)}")
-    logger.info(f"   Used default factory: {used_default_factory}")
-    logger.info("=" * 80)
-
-    # Create OnboardingMeta with all required fields
-    # onboarding_errors comes from normalization warnings
-    meta = OnboardingMeta(
-        used_default_factory=used_default_factory,
-        onboarding_errors=normalization_warnings,
-        inferred_assumptions=[],
+    logger.info(
+        f"run_decision_pipeline complete: {len(specs)} scenarios, "
+        f"{len(metrics_list)} metrics"
     )
 
-    # Return all outputs in the structured format
     return {
-        "factory": final_factory,
-        "situation_text": situation_text,
+        "factory": factory,
         "specs": specs,
         "metrics": metrics_list,
         "briefing": briefing,
         "meta": meta,
     }
+
+
+def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
+    """Run complete pipeline: onboarding + decision + simulation.
+
+    This glues run_onboarding and run_decision_pipeline together:
+    1. run_onboarding(factory_text) → (factory, meta)
+    2. run_decision_pipeline(factory, situation_text, meta) → full result
+
+    Args:
+        factory_text: Free-text factory description
+        situation_text: Free-text situation description
+
+    Returns:
+        dict containing:
+            - "factory": FactoryConfig
+            - "specs": list[ScenarioSpec]
+            - "metrics": list[ScenarioMetrics]
+            - "briefing": str (markdown)
+            - "meta": OnboardingMeta
+
+    Raises:
+        RuntimeError: If pipeline encounters unrecoverable error
+    """
+    logger.info("=" * 80)
+    logger.info("🔧 run_onboarded_pipeline started")
+    logger.info(f"   Factory text: {factory_text[:80]}{'...' if len(factory_text) > 80 else ''}")
+    logger.info(f"   Situation text: {situation_text[:100]}{'...' if len(situation_text) > 100 else ''}")
+    logger.info("=" * 80)
+
+    # Phase 1: Onboarding
+    logger.info("Phase 1️⃣ Onboarding (parsing and normalizing factory)...")
+    factory, meta = run_onboarding(factory_text)
+    logger.info(f"   ✓ Factory: {len(factory.machines)} machines, {len(factory.jobs)} jobs")
+    logger.info(f"   ✓ Used default: {meta.used_default_factory}, errors: {len(meta.onboarding_errors)}")
+
+    # Phase 2: Decision + Simulation
+    logger.info("Phase 2️⃣ Decision pipeline (intent → futures → simulation → briefing)...")
+    result = run_decision_pipeline(factory, situation_text, meta)
+    logger.info(f"   ✓ Scenarios: {len(result['specs'])}")
+    logger.info(f"   ✓ Briefing: {len(result['briefing'])} chars")
+
+    logger.info("=" * 80)
+    logger.info("✅ run_onboarded_pipeline completed successfully!")
+    logger.info(f"   Factory: {len(factory.machines)} machines, {len(factory.jobs)} jobs")
+    logger.info(f"   Scenarios: {len(result['specs'])}")
+    logger.info(f"   Used default factory: {meta.used_default_factory}")
+    logger.info("=" * 80)
+
+    return result

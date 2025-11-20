@@ -12,12 +12,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .orchestrator import run_onboarded_pipeline, is_toy_factory
+from .orchestrator import run_onboarded_pipeline, run_onboarding, is_toy_factory
 from .serializer import serialize_simulation_result
-from .agents import OnboardingAgent
-from .onboarding import normalize_factory
-from .models import OnboardingRequest, OnboardingResponse, OnboardingMeta
-from .world import build_toy_factory
+from .models import OnboardingRequest, OnboardingResponse
 
 # Configure logging to show INFO level messages in terminal
 logging.basicConfig(
@@ -124,8 +121,7 @@ def onboard(req: OnboardingRequest) -> dict:
     """
     HTTP endpoint for onboarding a factory description.
 
-    Wraps OnboardingAgent and normalization pipeline.
-    Returns just the factory configuration and metadata (no simulation).
+    Wraps run_onboarding and returns factory + metadata (no simulation).
 
     Args:
         req: Request containing factory_description
@@ -144,37 +140,9 @@ def onboard(req: OnboardingRequest) -> dict:
     logger.info("   Starting onboarding pipeline...")
     logger.info("=" * 80)
 
-    # Step 1: Call OnboardingAgent to parse factory description
-    agent = OnboardingAgent()
-    raw_factory = agent.run(req.factory_description)
-    logger.debug(f"OnboardingAgent returned factory with {len(raw_factory.machines)} machines, {len(raw_factory.jobs)} jobs")
+    factory, meta = run_onboarding(req.factory_description)
 
-    # Step 2: Normalize the factory
-    normalized_factory, normalization_warnings = normalize_factory(raw_factory)
-    logger.debug(f"Normalization produced {len(normalization_warnings)} warnings")
-
-    # Step 3: Determine fallback level (structural check)
-    # Fallback is needed if the normalized factory is empty (no machines or no jobs)
-    all_errors = normalization_warnings.copy()
-    if not normalized_factory.machines or not normalized_factory.jobs:
-        logger.debug("Fallback triggered: normalized factory is empty")
-        final_factory = build_toy_factory()
-        used_default_factory = True
-        all_errors.append("Normalization resulted in empty factory; using toy factory fallback")
-    else:
-        final_factory = normalized_factory
-        # Check if the normalized factory is structurally the toy factory
-        used_default_factory = is_toy_factory(final_factory)
-
-    # Step 4: Construct OnboardingMeta
-    meta = OnboardingMeta(
-        used_default_factory=used_default_factory,
-        onboarding_errors=all_errors,
-        inferred_assumptions=[],
-    )
-
-    # Step 5: Construct and return response
-    response = OnboardingResponse(factory=final_factory, meta=meta)
+    response = OnboardingResponse(factory=factory, meta=meta)
 
     logger.info("=" * 80)
     logger.info("✅ Onboarding completed successfully")
