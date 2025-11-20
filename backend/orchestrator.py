@@ -32,16 +32,18 @@ logger = logging.getLogger(__name__)
 def run_pipeline(user_text: str) -> dict:
     """Run the full simulation pipeline for a given free-text user description.
 
+    Enhanced for PR5: Now captures and passes context from agents through the pipeline.
+
     Steps:
     1. Build the baseline factory config.
-    2. Use IntentAgent to turn user_text into a base ScenarioSpec.
-    3. Use FuturesAgent to expand that into a list of ScenarioSpecs (1-3).
+    2. Use IntentAgent to turn user_text into a base ScenarioSpec (plus constraint context).
+    3. Use FuturesAgent to expand that into a list of ScenarioSpecs (1-3) (plus scenario reasoning).
     4. For each ScenarioSpec:
        - Run simulate(factory, spec)
        - Run compute_metrics(factory, result)
     5. Choose primary scenario (first in list).
     6. Build context summary describing all scenarios + metrics.
-    7. Use BriefingAgent to produce a markdown summary with context.
+    7. Use BriefingAgent to produce a markdown summary with intent, futures, and scenario context.
 
     Args:
         user_text: Free-text description of desired simulation scenario.
@@ -78,13 +80,15 @@ def run_pipeline(user_text: str) -> dict:
 
     # Step 2: Use IntentAgent to parse user text into a base ScenarioSpec
     logger.info("Step 3️⃣ Running IntentAgent (parsing user text → scenario intent)...")
-    base_spec: ScenarioSpec = intent_agent.run(user_text)
+    base_spec, intent_context = intent_agent.run(user_text, factory=factory)
     logger.info(f"   ✓ IntentAgent result: {base_spec.scenario_type.value}")
+    logger.debug(f"   Intent context: {intent_context}")
 
     # Step 3: Use FuturesAgent to expand into candidate scenarios
     logger.info("Step 4️⃣ Running FuturesAgent (expanding to candidate scenarios)...")
-    specs = futures_agent.run(base_spec)
+    specs, futures_context = futures_agent.run(base_spec, factory=factory)
     logger.info(f"   ✓ FuturesAgent generated {len(specs)} scenarios")
+    logger.debug(f"   Futures context: {futures_context}")
     if not specs:
         # Guard against empty list (though fallback in FuturesAgent should prevent this)
         logger.error("❌ FuturesAgent returned no scenarios!")
@@ -96,13 +100,13 @@ def run_pipeline(user_text: str) -> dict:
     metrics_list: list[ScenarioMetrics] = []
 
     for i, spec in enumerate(specs):
-        logger.info(f"   [Scenario {i+1}/{len(specs)}] Running simulation...")
+        logger.debug(f"   [Scenario {i+1}/{len(specs)}] Running simulation...")
         # Run simulation
         result: SimulationResult = simulate(factory, spec)
         results.append(result)
 
         # Compute metrics
-        logger.info(f"   [Scenario {i+1}/{len(specs)}] Computing metrics...")
+        logger.debug(f"   [Scenario {i+1}/{len(specs)}] Computing metrics...")
         metrics: ScenarioMetrics = compute_metrics(factory, result)
         metrics_list.append(metrics)
 
@@ -143,7 +147,12 @@ def run_pipeline(user_text: str) -> dict:
 
     # Step 7: Generate briefing with primary metrics and context
     logger.info("Step 8️⃣ Running BriefingAgent (generating markdown summary)...")
-    briefing: str = briefing_agent.run(primary_metrics, context=context)
+    briefing: str = briefing_agent.run(
+        primary_metrics,
+        context=context,
+        intent_context=intent_context,
+        futures_context=futures_context,
+    )
     logger.info(f"   ✓ Briefing generated ({len(briefing)} chars)")
 
     logger.info("=" * 80)
@@ -250,19 +259,21 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
 
     # Step 4: Use IntentAgent to parse situation text into a base ScenarioSpec
     logger.info("Step 4️⃣ Running IntentAgent (parsing situation text → scenario intent)...")
-    base_spec = intent_agent.run(situation_text)
+    base_spec, intent_context = intent_agent.run(situation_text, factory=normalized_factory)
     logger.info(
         f"   ✓ IntentAgent result: type={base_spec.scenario_type.value}"
     )
+    logger.debug(f"   Intent context: {intent_context}")
 
     # Step 5: Use FuturesAgent to expand into candidate scenarios
     logger.info("Step 5️⃣ Running FuturesAgent (expanding to candidate scenarios)...")
-    specs = futures_agent.run(base_spec)
+    specs, futures_context = futures_agent.run(base_spec, factory=normalized_factory)
     if not specs:
         logger.error("❌ FuturesAgent returned no scenarios!")
         raise RuntimeError("FuturesAgent returned no scenarios.")
 
     logger.info(f"   ✓ FuturesAgent generated {len(specs)} scenarios")
+    logger.debug(f"   Futures context: {futures_context}")
 
     # Step 6: For each scenario, run simulation and compute metrics
     logger.info("Step 6️⃣ Running simulations for each scenario...")
@@ -270,13 +281,13 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
     metrics_list: list[ScenarioMetrics] = []
 
     for i, spec in enumerate(specs):
-        logger.info(f"   [Scenario {i+1}/{len(specs)}] Running simulation...")
+        logger.debug(f"   [Scenario {i+1}/{len(specs)}] Running simulation...")
         # Run simulation
         result: SimulationResult = simulate(normalized_factory, spec)
         results.append(result)
 
         # Compute metrics
-        logger.info(f"   [Scenario {i+1}/{len(specs)}] Computing metrics...")
+        logger.debug(f"   [Scenario {i+1}/{len(specs)}] Computing metrics...")
         metrics: ScenarioMetrics = compute_metrics(normalized_factory, result)
         metrics_list.append(metrics)
 
@@ -315,9 +326,14 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
     context = "\n".join(context_lines)
     logger.info(f"   ✓ Context built ({len(context)} chars)")
 
-    # Generate briefing
+    # Generate briefing with full context
     logger.info("Step 8️⃣ Running BriefingAgent (generating markdown summary)...")
-    briefing: str = briefing_agent.run(primary_metrics, context=context)
+    briefing: str = briefing_agent.run(
+        primary_metrics,
+        context=context,
+        intent_context=intent_context,
+        futures_context=futures_context,
+    )
     logger.info(f"   ✓ Briefing generated ({len(briefing)} chars)")
 
     logger.info("=" * 80)

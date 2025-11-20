@@ -28,7 +28,7 @@ Tests will monkeypatch call_llm_json to avoid real network calls.
 """
 
 import logging
-from typing import Iterable
+from typing import Iterable, Optional
 from pydantic import BaseModel
 
 from .models import ScenarioSpec, ScenarioType, ScenarioMetrics, FactoryConfig
@@ -123,9 +123,13 @@ class BriefingResponse(BaseModel):
 
 
 class IntentAgent:
-    """LLM-backed agent that maps raw user text to a ScenarioSpec."""
+    """LLM-backed agent that maps raw user text to a ScenarioSpec.
 
-    def run(self, user_text: str) -> ScenarioSpec:
+    Enhanced for PR5: Now extracts user constraints and generates explanation context
+    for downstream agents.
+    """
+
+    def run(self, user_text: str, factory: FactoryConfig | None = None) -> tuple[ScenarioSpec, str]:
         """
         Parse user text into a ScenarioSpec using an LLM.
 
@@ -133,19 +137,25 @@ class IntentAgent:
 
         Args:
             user_text: Free-form user description
+            factory: Optional FactoryConfig for context (defaults to toy factory)
 
         Returns:
-            ScenarioSpec for the scenario to simulate
+            Tuple of (ScenarioSpec for the scenario to simulate, explanation string for context)
+            The explanation string is NOT part of the spec; it's for the orchestrator to pass to BriefingAgent.
         """
+        logger.debug(f"IntentAgent.run: Received user text: {user_text[:100]}...")
+
         try:
-            # Build a minimal factory summary for context
-            factory = build_toy_factory()
+            # Build factory context
+            if factory is None:
+                factory = build_toy_factory()
 
             job_summary = ", ".join([f"{j.id} ({j.name})" for j in factory.jobs])
             machine_summary = ", ".join([f"{m.id} ({m.name})" for m in factory.machines])
 
             prompt = f"""You are a factory operations interpreter. Your job is to read a planner's
 text description of their priorities for today and extract a scenario specification.
+Additionally, extract any explicit user constraints or goals mentioned (e.g., "no lateness", "rush J2", "finish by 6pm").
 
 You will output ONLY valid JSON matching the schema below. Do not add explanation or prose.
 
@@ -157,11 +167,21 @@ You will output ONLY valid JSON matching the schema below. Do not add explanatio
 - Do not invent combined types or unknown jobs (e.g., J99, J0)
 - Ignore unknown job IDs and treat as no rush
 
+# Constraint Extraction
+Extract any explicit constraints or goals the user mentions, such as:
+- "no lateness on J1"
+- "must finish by 6pm"
+- "zero late jobs"
+- "J2 is critical"
+- "makespan must be <= 8 hours"
+Include these verbatim in the constraint_summary field.
+
 # Schema
 {{
   "scenario_type": "BASELINE" | "RUSH_ARRIVES" | "M2_SLOWDOWN",
   "rush_job_id": null or a valid job ID,
-  "slowdown_factor": null or an integer >= 2
+  "slowdown_factor": null or an integer >= 2,
+  "constraint_summary": "string summarizing any explicit constraints or goals mentioned by user"
 }}
 
 # Scenario Types (Closed Set)
@@ -180,35 +200,64 @@ You will output ONLY valid JSON matching the schema below. Do not add explanatio
 
 # Respond with ONLY the JSON object, no explanation."""
 
-            spec = call_llm_json(prompt, ScenarioSpec)
-            logger.info(
+            # Parse with extended schema that includes constraint_summary
+            class IntentResponse(BaseModel):
+                scenario_type: ScenarioType
+                rush_job_id: Optional[str] = None
+                slowdown_factor: Optional[int] = None
+                constraint_summary: str = ""
+
+            response = call_llm_json(prompt, IntentResponse)
+            spec = ScenarioSpec(
+                scenario_type=response.scenario_type,
+                rush_job_id=response.rush_job_id,
+                slowdown_factor=response.slowdown_factor,
+            )
+            constraint_summary = response.constraint_summary
+
+            logger.debug(
                 "IntentAgent raw ScenarioSpec from LLM: type=%s rush_job_id=%s slowdown_factor=%s",
                 spec.scenario_type,
                 spec.rush_job_id,
                 spec.slowdown_factor,
             )
+            logger.debug(f"IntentAgent extracted constraints: {constraint_summary}")
 
             # Normalize the spec
             norm_spec = normalize_scenario_spec(spec, factory)
-            logger.info(
+            logger.debug(
                 "IntentAgent normalized ScenarioSpec: type=%s rush_job_id=%s slowdown_factor=%s",
                 norm_spec.scenario_type,
                 norm_spec.rush_job_id,
                 norm_spec.slowdown_factor,
             )
 
-            return norm_spec
+            # Build explanation for downstream agents
+            explanation = f"User intent: {norm_spec.scenario_type.value}"
+            if norm_spec.rush_job_id:
+                explanation += f" (rush job: {norm_spec.rush_job_id})"
+            if norm_spec.slowdown_factor:
+                explanation += f" (slowdown: {norm_spec.slowdown_factor}x)"
+            if constraint_summary:
+                explanation += f"\nUser constraints: {constraint_summary}"
+
+            logger.info(f"IntentAgent explanation: {explanation}")
+
+            return norm_spec, explanation
 
         except Exception as e:
             # Fallback to BASELINE on any error (LLM unavailable, parsing failure, etc.)
             logger.warning("IntentAgent LLM call failed; falling back to BASELINE: %s", e)
-            return ScenarioSpec(scenario_type=ScenarioType.BASELINE)
+            return ScenarioSpec(scenario_type=ScenarioType.BASELINE), "Fallback to baseline due to parsing error"
 
 
 class FuturesAgent:
-    """LLM-backed agent that expands a ScenarioSpec into candidate scenarios."""
+    """LLM-backed agent that expands a ScenarioSpec into candidate scenarios.
 
-    def run(self, spec: ScenarioSpec) -> list[ScenarioSpec]:
+    Enhanced for PR5: Now provides scenario selection reasoning for downstream context.
+    """
+
+    def run(self, spec: ScenarioSpec, factory: FactoryConfig | None = None) -> tuple[list[ScenarioSpec], str]:
         """
         Expand a scenario into 1-3 candidate scenarios using an LLM.
 
@@ -216,13 +265,18 @@ class FuturesAgent:
 
         Args:
             spec: Base ScenarioSpec to expand
+            factory: Optional FactoryConfig for context (defaults to toy factory)
 
         Returns:
-            List of 1-3 ScenarioSpec objects (≤ 3)
+            Tuple of (list of 1-3 ScenarioSpec objects, justification string for context)
+            The justification string explains why these scenarios were chosen.
         """
+        logger.debug(f"FuturesAgent.run: Received spec type={spec.scenario_type.value}")
+
         try:
             # Build factory summary for context
-            factory = build_toy_factory()
+            if factory is None:
+                factory = build_toy_factory()
 
             job_summary = ", ".join([f"{j.id} ({j.name})" for j in factory.jobs])
             machine_summary = ", ".join([f"{m.id} ({m.name})" for m in factory.machines])
@@ -247,11 +301,14 @@ You will output ONLY valid JSON. Do not add explanation.
 
 # Scenario Planning Rules
 - Produce at most 3 scenarios
-- One scenario should reflect the interpreted intent from the base scenario
-- Others can be more conservative or more aggressive variants of the same type
+- If the primary scenario is BASELINE: include baseline, and optionally one other scenario for context
+- If the primary scenario is RUSH_ARRIVES: include the primary rush scenario, and optionally baseline and/or a more aggressive rush
+- If the primary scenario is M2_SLOWDOWN: include the primary slowdown, and optionally baseline and/or more severe slowdown
 - All rush_job_id values must be real job IDs from available jobs
 - All slowdown_factor values must be integers >= 2
 - Do NOT create mixed types (e.g., rush AND slowdown in same scenario)
+- Avoid irrelevant expansions; keep scenarios focused on the primary scenario type
+- When in doubt, include BASELINE as a reference point
 
 # Schema (return exactly this structure)
 {{
@@ -262,7 +319,8 @@ You will output ONLY valid JSON. Do not add explanation.
       "slowdown_factor": null or integer >= 2
     }},
     ...
-  ]
+  ],
+  "justification": "1-2 sentence summary of why these scenarios were chosen"
 }}
 
 # Available Jobs
@@ -276,35 +334,54 @@ You will output ONLY valid JSON. Do not add explanation.
 
 Generate 1-3 reasonable scenario variants, all valid per the rules above.
 
-# Respond with ONLY the JSON object with "scenarios" array."""
+# Respond with ONLY the JSON object with "scenarios" array and "justification" string."""
 
-            response = call_llm_json(prompt, FuturesResponse)
+            class FuturesResponseWithJustification(BaseModel):
+                scenarios: list[ScenarioSpec]
+                justification: str = ""
+
+            response = call_llm_json(prompt, FuturesResponseWithJustification)
             scenarios = response.scenarios
+            justification = response.justification
 
-            logger.info("FuturesAgent returned %d scenarios from LLM", len(scenarios))
+            logger.debug(f"FuturesAgent returned {len(scenarios)} scenarios from LLM")
+            logger.debug(f"FuturesAgent justification: {justification}")
 
             # Safety: ensure we have at most 3 scenarios
             if len(scenarios) > 3:
                 scenarios = scenarios[:3]
-                logger.info("FuturesAgent truncated to 3 scenarios")
+                logger.debug("FuturesAgent truncated to 3 scenarios")
 
             # Safety: if empty, return original spec
             if not scenarios:
                 scenarios = [spec]
-                logger.info("FuturesAgent empty response; returning [spec]")
+                justification = f"Fallback: returning primary scenario only ({spec.scenario_type.value})"
+                logger.debug("FuturesAgent empty response; returning [spec]")
 
-            return scenarios
+            logger.info(f"FuturesAgent scenario selection: {len(scenarios)} scenarios chosen for {spec.scenario_type.value}")
+
+            return scenarios, justification
 
         except Exception as e:
             # Fallback to [spec] on any error
             logger.warning("FuturesAgent LLM call failed; falling back to [spec]: %s", e)
-            return [spec]
+            return [spec], f"Fallback due to error: {str(e)}"
 
 
 class BriefingAgent:
-    """LLM-backed agent that converts metrics to a markdown briefing."""
+    """LLM-backed agent that converts metrics to a markdown briefing.
 
-    def run(self, metrics: ScenarioMetrics, context: str | None = None) -> str:
+    Enhanced for PR5: Now includes feasibility assessment against user constraints
+    and explicit conflict detection.
+    """
+
+    def run(
+        self,
+        metrics: ScenarioMetrics,
+        context: str | None = None,
+        intent_context: str | None = None,
+        futures_context: str | None = None,
+    ) -> str:
         """
         Generate a markdown briefing from metrics using an LLM.
 
@@ -312,11 +389,15 @@ class BriefingAgent:
 
         Args:
             metrics: ScenarioMetrics for the primary scenario
-            context: Optional summary of other scenarios and their metrics (includes user_text)
+            context: Optional summary of other scenarios and their metrics
+            intent_context: Optional explanation from IntentAgent (includes user constraints)
+            futures_context: Optional justification from FuturesAgent (why these scenarios were chosen)
 
         Returns:
             Markdown string briefing
         """
+        logger.debug(f"BriefingAgent.run: Received metrics for briefing (makespan={metrics.makespan_hour}h)")
+
         try:
             # Build factory summary
             factory = build_toy_factory()
@@ -334,37 +415,50 @@ Job Lateness: {dict(metrics.job_lateness)}"""
             if context:
                 context_str = f"\n# Scenarios Context\n{context}"
 
+            intent_str = ""
+            if intent_context:
+                intent_str = f"\n# User Intent & Constraints\n{intent_context}"
+
+            futures_str = ""
+            if futures_context:
+                futures_str = f"\n# Scenario Selection Reasoning\n{futures_context}"
+
             prompt = f"""You are a factory operations briefing writer. Your job is to translate
 simulation metrics into a clear, actionable morning briefing for a plant manager.
 
 Use ONLY the data provided. Do not invent jobs, machines, or scenarios.
 You will output ONLY valid JSON matching the schema below. Do not add explanation or prose.
 
-# Important: Constraint Analysis
-When reviewing the scenarios and metrics, compare user constraints (if any) against the actual metrics:
-- If user requested impossible targets (e.g., makespan ≤ 6h but all scenarios are ≥ 9h, or "no late jobs" but every scenario has lateness):
-  * Explicitly state that no scenario meets all constraints
-  * Explain the tradeoff and which scenario is the "least bad"
-  * Do not assume constraints are always satisfiable
-- If some scenarios meet constraints better than others, highlight the best option
-- Always be honest about what the metrics show, even if it conflicts with user expectations
+# Critical Instructions: Constraint & Feasibility Analysis
+When reviewing the scenarios and metrics, explicitly:
+1. Identify any user constraints mentioned (e.g., "no lateness", "must finish by 6pm", "rush J2")
+2. Compare these constraints against the actual metrics:
+   - If user requested impossible targets (e.g., makespan ≤ 6h but all scenarios are ≥ 9h, or "no late jobs" but scenario shows lateness):
+     * Clearly state that the constraint cannot be met
+     * Explain why (e.g., "M2 is a bottleneck; all three jobs need 6h of M2 time, but M2 is only available 24h/day")
+     * Show the "best achievable" alternative
+   - If some scenarios meet constraints better than others, highlight which is closest
+   - Always be honest about what the metrics show, even if it conflicts with user expectations
+3. Structure your response with a dedicated "Feasibility Assessment" section that addresses constraints explicitly
+4. If there are NO constraints mentioned, still provide the standard briefing structure
 
 # FactoryConfig Summary
 Jobs: {job_summary}
 Machines: {machine_summary}
 
 # Primary Scenario Metrics
-{metrics_summary}{context_str}
+{metrics_summary}{intent_str}{futures_str}{context_str}
 
 # Schema
 {{
-  "markdown": "# Morning Briefing\n\n## Today at a Glance\n[1-2 sentences summarizing the main risk or recommendation]\n\n## Key Risks\n[3-5 bullet points on lateness, bottlenecks, utilization]\n\n## Recommended Actions\n[2-4 bullet points with concrete, actionable steps]\n\n## Limitations of This Model\n[2-3 sentences on scope and limitations of this deterministic model]"
+  "markdown": "# Morning Briefing\n\n## Today at a Glance\n[1-2 sentences summarizing the main risk, constraint feasibility, or recommendation]\n\n## Feasibility Assessment\n[If constraints were mentioned by user, state whether they can be met. If impossible, explain why and what is best achievable. If no constraints, you may skip this section or note 'No explicit constraints mentioned.']\n\n## Key Risks\n[3-5 bullet points on lateness, bottlenecks, utilization, and any constraint violations]\n\n## Recommended Actions\n[2-4 bullet points with concrete, actionable steps]\n\n## Limitations of This Model\n[2-3 sentences on scope and limitations of this deterministic model]"
 }}
 
 # Respond with ONLY the JSON object, no explanation."""
 
-            logger.info("BriefingAgent generating briefing via LLM")
+            logger.debug(f"BriefingAgent: Calling LLM with intent_context={bool(intent_context)}, futures_context={bool(futures_context)}")
             response = call_llm_json(prompt, BriefingResponse)
+            logger.info(f"BriefingAgent: Generated briefing ({len(response.markdown)} chars)")
             return response.markdown
 
         except Exception as e:
@@ -376,6 +470,17 @@ Machines: {machine_summary}
                 "## Today at a Glance",
                 f"Makespan: {metrics.makespan_hour} hours. Bottleneck: {metrics.bottleneck_machine_id}.",
                 "",
+            ]
+
+            # Add user intent if available
+            if intent_context:
+                lines.extend([
+                    "## Feasibility Assessment",
+                    f"{intent_context}",
+                    "",
+                ])
+
+            lines.extend([
                 "## Key Risks",
                 f"- {metrics.bottleneck_machine_id} is bottleneck at {metrics.bottleneck_utilization:.0%} utilization",
                 f"- Late jobs: {[k for k, v in metrics.job_lateness.items() if v > 0] or 'none'}",
@@ -387,5 +492,5 @@ Machines: {machine_summary}
                 "## Limitations of This Model",
                 "This is a deterministic simulation of a single day. It does not account for real-world variability, "
                 "material delays, equipment breakdowns, or other disruptions.",
-            ]
+            ])
             return "\n".join(lines)
