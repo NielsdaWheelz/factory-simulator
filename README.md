@@ -118,14 +118,28 @@ For comprehensive setup instructions including environment variables and depende
 
 ```bash
 # Install dependencies
-uv pip install -U openai pydantic pytest
+uv pip install -U openai pydantic pytest fastapi uvicorn
 
 # or with pip:
-pip install -U openai pydantic pytest
+pip install -U openai pydantic pytest fastapi uvicorn
 
 # Set your OpenAI API key
 export OPENAI_API_KEY="sk-..."
 ```
+
+### Environment Configuration
+
+The system supports environment-based configuration for multi-environment deployments:
+
+**Backend** (`.env` at repo root):
+- `BACKEND_CORS_ORIGINS` – Comma-separated CORS origins. Default: `*` (dev-friendly)
+  - Example: `BACKEND_CORS_ORIGINS=https://frontend.example.com,https://www.example.com`
+
+**Frontend** (`frontend/.env`):
+- `VITE_API_BASE_URL` – Backend API base URL. Default: `http://localhost:8000`
+  - Example: `VITE_API_BASE_URL=https://api.example.com`
+
+See `.env.example` and `frontend/.env.example` for templates.
 
 ### Running the CLI
 
@@ -191,8 +205,8 @@ python -m main "your factory situation here"
 The backend exposes a REST API via FastAPI for running simulations with custom factory configs:
 
 ```bash
-# Install FastAPI and Uvicorn
-pip install fastapi uvicorn
+# Optional: Set up environment (or use defaults)
+cp .env.example .env  # Not required; defaults to * for CORS
 
 # Start the API server
 uvicorn server:app --reload
@@ -221,6 +235,9 @@ The frontend is a React application built with Vite and TypeScript. To run the f
 # Navigate to frontend directory
 cd frontend
 
+# Optional: Set up environment (or use defaults)
+cp .env.example .env  # Not required; defaults to http://localhost:8000
+
 # Install dependencies
 npm install   # or pnpm install / yarn install
 
@@ -231,7 +248,7 @@ npm run dev
 npm run build
 ```
 
-**Note**: The frontend can call `http://localhost:8000/api/simulate` once both the backend API and frontend dev servers are running.
+**Note**: The frontend calls the backend API at the URL specified in `VITE_API_BASE_URL` (default: `http://localhost:8000`). Ensure the backend is running and CORS is configured correctly.
 
 ## How It Works
 
