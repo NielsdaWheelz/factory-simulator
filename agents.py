@@ -23,13 +23,54 @@ Tests will monkeypatch call_llm_json to avoid real network calls.
 """
 
 import logging
+from typing import Iterable
 from pydantic import BaseModel
 
-from models import ScenarioSpec, ScenarioType, ScenarioMetrics
+from models import ScenarioSpec, ScenarioType, ScenarioMetrics, FactoryConfig
 from world import build_toy_factory
 from llm import call_llm_json
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_scenario_spec(spec: ScenarioSpec, factory: FactoryConfig) -> ScenarioSpec:
+    """
+    Apply small, conservative corrections to an LLM-produced ScenarioSpec.
+
+    Rules:
+    - If scenario_type == M2_SLOWDOWN:
+        - force rush_job_id = None
+    - If scenario_type == RUSH_ARRIVES:
+        - if rush_job_id is not one of the known job IDs in factory.jobs,
+          fall back to BASELINE with rush_job_id=None and slowdown_factor=None.
+
+    Returns a new ScenarioSpec (does not mutate the input if it's immutable).
+    """
+    if spec.scenario_type == ScenarioType.M2_SLOWDOWN:
+        # If M2_SLOWDOWN has rush_job_id set, clear it
+        if spec.rush_job_id is not None:
+            return ScenarioSpec(
+                scenario_type=ScenarioType.M2_SLOWDOWN,
+                rush_job_id=None,
+                slowdown_factor=spec.slowdown_factor,
+            )
+        return spec
+
+    elif spec.scenario_type == ScenarioType.RUSH_ARRIVES:
+        # Check if rush_job_id is valid
+        valid_job_ids = {job.id for job in factory.jobs}
+        if spec.rush_job_id is None or spec.rush_job_id not in valid_job_ids:
+            # Fall back to BASELINE
+            return ScenarioSpec(
+                scenario_type=ScenarioType.BASELINE,
+                rush_job_id=None,
+                slowdown_factor=None,
+            )
+        return spec
+
+    else:
+        # BASELINE or any other scenario type: return as-is
+        return spec
 
 
 # Internal DTOs for multi-object LLM responses
@@ -70,6 +111,14 @@ text description of their priorities for today and extract a scenario specificat
 
 You will output ONLY valid JSON matching the schema below. Do not add explanation or prose.
 
+# Mapping Rules
+- Mentions of "rush", "expedite", "priority" + a job ID → RUSH_ARRIVES with that job ID
+- Mentions of "M2 slow", "M2 half-speed", "M2 maintenance" → M2_SLOWDOWN with slowdown_factor 2 or 3
+- Explicit "normal day", "no rush", "no issues" → BASELINE
+- If multiple patterns match, choose the scenario type that best reflects the main risk
+- Do not invent combined types or unknown jobs (e.g., J99, J0)
+- Ignore unknown job IDs and treat as no rush
+
 # Schema
 {{
   "scenario_type": "BASELINE" | "RUSH_ARRIVES" | "M2_SLOWDOWN",
@@ -77,10 +126,10 @@ You will output ONLY valid JSON matching the schema below. Do not add explanatio
   "slowdown_factor": null or an integer >= 2
 }}
 
-# Definitions
-- BASELINE: Run the day as planned with no special modifications.
-- RUSH_ARRIVES: An existing job is prioritized as a rush order (rush_job_id must be a real job ID).
-- M2_SLOWDOWN: Machine M2 is slowed by a factor (slowdown_factor >= 2).
+# Scenario Types (Closed Set)
+- BASELINE: Run the day as planned with no special modifications. rush_job_id and slowdown_factor must be null.
+- RUSH_ARRIVES: An existing job is prioritized as a rush order. rush_job_id MUST be a real job ID from available jobs, slowdown_factor must be null.
+- M2_SLOWDOWN: Machine M2 is slowed by a factor. slowdown_factor must be >= 2 and rush_job_id must be null.
 
 # Available Jobs
 {job_summary}
@@ -94,7 +143,23 @@ You will output ONLY valid JSON matching the schema below. Do not add explanatio
 # Respond with ONLY the JSON object, no explanation."""
 
             spec = call_llm_json(prompt, ScenarioSpec)
-            return spec
+            logger.info(
+                "IntentAgent raw ScenarioSpec from LLM: type=%s rush_job_id=%s slowdown_factor=%s",
+                spec.scenario_type,
+                spec.rush_job_id,
+                spec.slowdown_factor,
+            )
+
+            # Normalize the spec
+            norm_spec = normalize_scenario_spec(spec, factory)
+            logger.info(
+                "IntentAgent normalized ScenarioSpec: type=%s rush_job_id=%s slowdown_factor=%s",
+                norm_spec.scenario_type,
+                norm_spec.rush_job_id,
+                norm_spec.slowdown_factor,
+            )
+
+            return norm_spec
 
         except Exception as e:
             # Fallback to BASELINE on any error (LLM unavailable, parsing failure, etc.)
@@ -133,13 +198,22 @@ class FuturesAgent:
 
             prompt = f"""You are a factory scenario planner. Your job is to take a scenario
 and generate 1-3 concrete scenario variations that explore the day's possibilities.
+All scenarios must be valid ScenarioSpec objects.
 
 You will output ONLY valid JSON. Do not add explanation.
 
-# Scenario Types (Closed Set)
-1. BASELINE: No modifications.
-2. RUSH_ARRIVES: An existing job is injected as a rush instance (must specify valid rush_job_id).
-3. M2_SLOWDOWN: Machine M2 is slowed (must specify slowdown_factor >= 2).
+# Valid Scenario Combinations
+1. BASELINE: rush_job_id=null, slowdown_factor=null (no modifications)
+2. RUSH_ARRIVES: rush_job_id=<valid job ID>, slowdown_factor=null
+3. M2_SLOWDOWN: rush_job_id=null, slowdown_factor>=2
+
+# Scenario Planning Rules
+- Produce at most 3 scenarios
+- One scenario should reflect the interpreted intent from the base scenario
+- Others can be more conservative or more aggressive variants of the same type
+- All rush_job_id values must be real job IDs from available jobs
+- All slowdown_factor values must be integers >= 2
+- Do NOT create mixed types (e.g., rush AND slowdown in same scenario)
 
 # Schema (return exactly this structure)
 {{
@@ -162,21 +236,24 @@ You will output ONLY valid JSON. Do not add explanation.
 # Current Scenario
 {spec_summary}
 
-Generate 1-3 reasonable scenario variants. All rush_job_id values must be real job IDs.
-All slowdown_factor values must be >= 2.
+Generate 1-3 reasonable scenario variants, all valid per the rules above.
 
 # Respond with ONLY the JSON object with "scenarios" array."""
 
             response = call_llm_json(prompt, FuturesResponse)
             scenarios = response.scenarios
 
+            logger.info("FuturesAgent returned %d scenarios from LLM", len(scenarios))
+
             # Safety: ensure we have at most 3 scenarios
             if len(scenarios) > 3:
                 scenarios = scenarios[:3]
+                logger.info("FuturesAgent truncated to 3 scenarios")
 
             # Safety: if empty, return original spec
             if not scenarios:
                 scenarios = [spec]
+                logger.info("FuturesAgent empty response; returning [spec]")
 
             return scenarios
 
@@ -197,7 +274,7 @@ class BriefingAgent:
 
         Args:
             metrics: ScenarioMetrics for the primary scenario
-            context: Optional summary of other scenarios and their metrics
+            context: Optional summary of other scenarios and their metrics (includes user_text)
 
         Returns:
             Markdown string briefing
@@ -225,6 +302,15 @@ simulation metrics into a clear, actionable morning briefing for a plant manager
 Use ONLY the data provided. Do not invent jobs, machines, or scenarios.
 You will output ONLY valid JSON matching the schema below. Do not add explanation or prose.
 
+# Important: Constraint Analysis
+When reviewing the scenarios and metrics, compare user constraints (if any) against the actual metrics:
+- If user requested impossible targets (e.g., makespan ≤ 6h but all scenarios are ≥ 9h, or "no late jobs" but every scenario has lateness):
+  * Explicitly state that no scenario meets all constraints
+  * Explain the tradeoff and which scenario is the "least bad"
+  * Do not assume constraints are always satisfiable
+- If some scenarios meet constraints better than others, highlight the best option
+- Always be honest about what the metrics show, even if it conflicts with user expectations
+
 # FactoryConfig Summary
 Jobs: {job_summary}
 Machines: {machine_summary}
@@ -239,12 +325,13 @@ Machines: {machine_summary}
 
 # Respond with ONLY the JSON object, no explanation."""
 
+            logger.info("BriefingAgent generating briefing via LLM")
             response = call_llm_json(prompt, BriefingResponse)
             return response.markdown
 
         except Exception as e:
             # Fallback to deterministic template on error
-            logger.warning("BriefingAgent LLM call failed; using deterministic template: %s", e)
+            logger.warning("BriefingAgent LLM failed; using deterministic fallback: %s", e)
             lines = [
                 "# Morning Briefing",
                 "",

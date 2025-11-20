@@ -13,8 +13,11 @@ Metrics computed:
 - bottleneck_utilization: bottleneck busy hours / makespan
 """
 
+import logging
 from collections import defaultdict
 from models import FactoryConfig, SimulationResult, ScenarioMetrics
+
+logger = logging.getLogger(__name__)
 
 
 def compute_metrics(factory: FactoryConfig, result: SimulationResult) -> ScenarioMetrics:
@@ -66,9 +69,18 @@ def compute_metrics(factory: FactoryConfig, result: SimulationResult) -> Scenari
     bottleneck_utilization = bottleneck_busy_hours / makespan_hour
 
     # Create and return metrics
-    return ScenarioMetrics(
+    metrics = ScenarioMetrics(
         makespan_hour=makespan_hour,
         job_lateness=job_lateness,
         bottleneck_machine_id=bottleneck_machine_id,
         bottleneck_utilization=bottleneck_utilization,
     )
+
+    logger.debug(
+        "compute_metrics: makespan=%d bottleneck=%s util=%.3f",
+        metrics.makespan_hour,
+        metrics.bottleneck_machine_id,
+        metrics.bottleneck_utilization,
+    )
+
+    return metrics
