@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 OPENAI_MODEL = "gpt5nano"
 
