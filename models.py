@@ -43,3 +43,19 @@ class FactoryConfig(BaseModel):
             raise ValueError("Duplicate machine IDs")
         if len(job_ids) != len(set(job_ids)):
             raise ValueError("Duplicate job IDs")
+
+
+class ScheduledStep(BaseModel):
+    """Represents a single scheduled step in the simulation result."""
+    job_id: str = Field(..., description="Job ID this step belongs to")
+    machine_id: str = Field(..., description="Machine ID where step runs")
+    step_index: int = Field(..., description="Index in the job's steps list")
+    start_hour: int = Field(..., description="Integer hour when step starts")
+    end_hour: int = Field(..., description="Integer hour when step ends (exclusive)")
+
+
+class SimulationResult(BaseModel):
+    """Result of a baseline simulation run."""
+    scheduled_steps: list[ScheduledStep] = Field(..., description="All scheduled steps")
+    job_completion_times: dict[str, int] = Field(..., description="Job ID -> completion hour")
+    makespan_hour: int = Field(..., description="Total hours from 0 to last completion")
