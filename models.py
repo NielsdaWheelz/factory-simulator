@@ -94,3 +94,26 @@ class ScenarioSpec(BaseModel):
             if self.rush_job_id is not None:
                 raise ValueError("M2_SLOWDOWN scenario must have rush_job_id=None")
         return self
+
+
+class ScenarioMetrics(BaseModel):
+    """Aggregate performance metrics for a single simulation run."""
+
+    makespan_hour: int = Field(..., description="Total makespan in integer hours")
+    job_lateness: dict[str, int] = Field(..., description="Job ID -> lateness in hours (>= 0)")
+    bottleneck_machine_id: str = Field(..., description="Machine ID with highest total busy time")
+    bottleneck_utilization: float = Field(..., description="Utilization of bottleneck machine (0.0 to 1.0)")
+
+    @model_validator(mode="after")
+    def validate_metrics(self):
+        """Validate metrics constraints."""
+        if self.makespan_hour < 0:
+            raise ValueError("makespan_hour must be non-negative")
+        for job_id, lateness in self.job_lateness.items():
+            if not isinstance(lateness, int):
+                raise ValueError(f"lateness for {job_id} must be an integer")
+            if lateness < 0:
+                raise ValueError(f"lateness for {job_id} must be non-negative")
+        if not (0.0 <= self.bottleneck_utilization <= 1.0):
+            raise ValueError("bottleneck_utilization must be between 0.0 and 1.0")
+        return self
