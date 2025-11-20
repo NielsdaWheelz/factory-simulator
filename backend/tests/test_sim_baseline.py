@@ -9,8 +9,8 @@ Tests verify:
 """
 
 import pytest
-from world import build_toy_factory
-from sim import simulate_baseline
+from backend.world import build_toy_factory
+from backend.sim import simulate_baseline
 
 
 class TestBuildToyFactory:

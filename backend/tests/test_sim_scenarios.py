@@ -10,9 +10,9 @@ Tests verify:
 
 import pytest
 from copy import deepcopy
-from world import build_toy_factory
-from sim import simulate_baseline, simulate, apply_scenario
-from models import ScenarioSpec, ScenarioType
+from backend.world import build_toy_factory
+from backend.sim import simulate_baseline, simulate, apply_scenario
+from backend.models import ScenarioSpec, ScenarioType
 
 
 class TestApplyScenarioBaseline:

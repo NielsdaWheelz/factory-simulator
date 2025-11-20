@@ -11,8 +11,8 @@ Core functions:
 """
 
 import logging
-from models import FactoryConfig, Machine, Job, Step
-from world import build_toy_factory
+from .models import FactoryConfig, Machine, Job, Step
+from .world import build_toy_factory
 
 logger = logging.getLogger(__name__)
 

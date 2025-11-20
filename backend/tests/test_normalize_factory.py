@@ -10,9 +10,9 @@ Tests verify:
 """
 
 import pytest
-from models import FactoryConfig, Machine, Job, Step
-from world import build_toy_factory
-from onboarding import normalize_factory
+from backend.models import FactoryConfig, Machine, Job, Step
+from backend.world import build_toy_factory
+from backend.onboarding import normalize_factory
 
 
 class TestNormalizeFactoryDurationFix:

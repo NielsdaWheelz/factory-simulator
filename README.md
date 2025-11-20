@@ -89,22 +89,34 @@ Return { factory, specs, results, metrics, briefing }
 
 ```
 factory-simulator/
-├── main.py                      # CLI entrypoint (stub)
-├── config.py                    # Environment & configuration
-├── models.py                    # Pydantic data models (all types)
-├── world.py                     # Toy factory definition (3 machines, 3 jobs)
-├── sim.py                       # Deterministic simulation engine (EDD scheduler)
-├── metrics.py                   # Metrics computation (lateness, bottleneck, utilization)
-├── llm.py                       # LLM communication helper (OpenAI JSON mode)
-├── agents.py                    # Three LLM-backed agents (Intent, Futures, Briefing)
-├── orchestrator.py              # Multi-scenario pipeline (run_pipeline)
-├── tests/                       # Comprehensive test suite (~1,800 lines)
-│   ├── test_sim_baseline.py     # Toy factory & baseline scheduling tests
-│   ├── test_sim_scenarios.py    # Scenario application & pure function tests
-│   ├── test_metrics.py          # Metrics computation validation
-│   ├── test_agents_llm.py       # Agent behavior with mocked LLM calls
-│   └── test_orchestrator.py     # End-to-end pipeline integration tests
+├── backend/                     # Python backend (FastAPI + simulation engine)
+│   ├── __init__.py              # Package marker
+│   ├── main.py                  # CLI entrypoint
+│   ├── config.py                # Environment & configuration
+│   ├── models.py                # Pydantic data models (all types)
+│   ├── world.py                 # Toy factory definition (3 machines, 3 jobs)
+│   ├── sim.py                   # Deterministic simulation engine (EDD scheduler)
+│   ├── metrics.py               # Metrics computation (lateness, bottleneck, utilization)
+│   ├── llm.py                   # LLM communication helper (OpenAI JSON mode)
+│   ├── agents.py                # Three LLM-backed agents (Intent, Futures, Briefing)
+│   ├── orchestrator.py          # Multi-scenario pipeline (run_pipeline)
+│   ├── server.py                # FastAPI HTTP server
+│   ├── serializer.py            # JSON serialization utilities
+│   ├── onboarding.py            # Factory config normalization
+│   ├── .env.example             # Backend environment template
+│   └── tests/                   # Comprehensive test suite (~1,800 lines)
+│       ├── test_sim_baseline.py     # Toy factory & baseline scheduling tests
+│       ├── test_sim_scenarios.py    # Scenario application & pure function tests
+│       ├── test_metrics.py          # Metrics computation validation
+│       ├── test_agents_llm.py       # Agent behavior with mocked LLM calls
+│       ├── test_orchestrator.py     # End-to-end pipeline integration tests
+│       ├── test_server_simulate.py  # FastAPI endpoint tests
+│       ├── test_normalize_factory.py # Factory normalization tests
+│       └── test_run_onboarded_pipeline.py # Full pipeline integration tests
+├── frontend/                    # React + Vite frontend
+│   └── .env.example             # Frontend environment template
 ├── FACTORY_SIMULATOR_SPEC.md    # Complete specification document
+├── RUNTIME_SETUP_AND_TESTING.md # Setup and testing guide
 └── README.md                    # This file
 ```
 
@@ -131,7 +143,7 @@ export OPENAI_API_KEY="sk-..."
 
 The system supports environment-based configuration for multi-environment deployments:
 
-**Backend** (`.env` at repo root):
+**Backend** (`backend/.env`):
 - `BACKEND_CORS_ORIGINS` – Comma-separated CORS origins. Default: `*` (dev-friendly)
   - Example: `BACKEND_CORS_ORIGINS=https://frontend.example.com,https://www.example.com`
 
@@ -139,22 +151,22 @@ The system supports environment-based configuration for multi-environment deploy
 - `VITE_API_BASE_URL` – Backend API base URL. Default: `http://localhost:8000`
   - Example: `VITE_API_BASE_URL=https://api.example.com`
 
-See `.env.example` and `frontend/.env.example` for templates.
+See `backend/.env.example` and `frontend/.env.example` for templates.
 
 ### Running the CLI
 
 ```bash
 # With a description
-python -m main "we just got a rush order for J2, do not delay J1"
+python -m backend.main "we just got a rush order for J2, do not delay J1"
 
 # Or interactive mode
-python -m main
+python -m backend.main
 ```
 
 ### Running Programmatically
 
 ```python
-from orchestrator import run_pipeline
+from backend.orchestrator import run_pipeline
 
 # Run the pipeline with free-form user text
 result = run_pipeline("We have a rush order for J2 today. J3 is important. I can delay J1 if needed.")
@@ -171,13 +183,13 @@ print(result['briefing'])
 
 ```bash
 # Run all tests (uses mocked LLM calls, no API key needed)
-pytest tests/ -v
+python -m pytest
 
 # Run specific test file
-pytest tests/test_sim_baseline.py -v
+python -m pytest backend/tests/test_sim_baseline.py -v
 
 # Run with coverage
-pytest tests/ --cov=. --cov-report=html
+python -m pytest --cov=backend --cov-report=html
 ```
 
 ## Development Setup
@@ -188,16 +200,16 @@ The backend is the simulation engine with LLM agents. Set it up as described abo
 
 ```bash
 # Install dependencies
-pip install -U openai pydantic pytest
+pip install -U openai pydantic pytest fastapi uvicorn
 
 # Set your OpenAI API key
 export OPENAI_API_KEY="sk-..."
 
-# Run tests
+# Run tests (from repo root)
 python -m pytest
 
-# Run CLI
-python -m main "your factory situation here"
+# Run CLI (from repo root)
+python -m backend.main "your factory situation here"
 ```
 
 ### Backend API (FastAPI)
@@ -205,11 +217,12 @@ python -m main "your factory situation here"
 The backend exposes a REST API via FastAPI for running simulations with custom factory configs:
 
 ```bash
-# Optional: Set up environment (or use defaults)
+# Optional: Set up environment in backend/ directory (or use defaults)
+cd backend
 cp .env.example .env  # Not required; defaults to * for CORS
 
-# Start the API server
-uvicorn server:app --reload
+# Start the API server (run from repo root)
+uvicorn backend.server:app --reload
 
 # Server runs at http://localhost:8000
 # API documentation available at http://localhost:8000/docs

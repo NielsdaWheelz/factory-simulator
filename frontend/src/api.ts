@@ -20,25 +20,25 @@ export interface Factory {
   jobs: Job[];
 }
 
-export interface Scenario {
-  label: string;
+export interface ScenarioSpec {
   scenario_type: string;
+  rush_job_id: string | null;
+  slowdown_factor: number | null;
 }
 
 export interface ScenarioMetrics {
-  scenario_name: string;
-  scenario_type: string;
   makespan_hour: number;
-  total_lateness_hours: number;
+  job_lateness: { [jobId: string]: number };
   bottleneck_machine_id: string;
   bottleneck_utilization: number;
 }
 
 export interface SimulateResponse {
   factory: Factory;
-  scenarios: Scenario[];
+  specs: ScenarioSpec[];
   metrics: ScenarioMetrics[];
   briefing: string;
+  situation_text: string;
   meta: {
     used_default_factory: boolean;
     onboarding_errors: string[];

@@ -7,12 +7,21 @@ Handles JSON serialization of Pydantic models and enum types.
 
 import logging
 import os
+import sys
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from orchestrator import run_onboarded_pipeline
-from serializer import serialize_simulation_result
+from .orchestrator import run_onboarded_pipeline
+from .serializer import serialize_simulation_result
+
+# Configure logging to show INFO level messages in terminal
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    stream=sys.stdout,
+    force=True
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,23 +75,32 @@ def simulate(req: SimulateRequest) -> dict:
     Raises:
         RuntimeError: If pipeline encounters an error
     """
-    logger.info(
-        "POST /api/simulate factory_desc_len=%d situation_text_len=%d",
-        len(req.factory_description),
-        len(req.situation_text),
-    )
+    logger.info("=" * 80)
+    logger.info("🚀 POST /api/simulate endpoint called")
+    logger.info(f"   Factory description length: {len(req.factory_description)} chars")
+    logger.info(f"   Situation text length: {len(req.situation_text)} chars")
+    logger.info("   Starting pipeline...")
+    logger.info("=" * 80)
 
     result = run_onboarded_pipeline(
         factory_text=req.factory_description,
         situation_text=req.situation_text,
     )
 
+    logger.info("=" * 80)
+    logger.info("✅ Pipeline completed successfully")
+    logger.info(f"   Factory: {len(result['factory'].machines)} machines, {len(result['factory'].jobs)} jobs")
+    logger.info(f"   Scenarios: {len(result['specs'])} generated")
+    logger.info(f"   Metrics: {len(result['metrics'])} computed")
+    logger.info(f"   Briefing length: {len(result['briefing'])} chars")
+    logger.info("   Serializing response...")
+
     # Ensure result is JSON serializable
     serialized = serialize_simulation_result(result)
 
-    logger.info(
-        "simulate endpoint returning result with %d scenarios",
-        len(serialized.get("specs", [])),
-    )
+    logger.info("=" * 80)
+    logger.info("✅ Response serialized and ready to send")
+    logger.info(f"   Total response keys: {list(serialized.keys())}")
+    logger.info("=" * 80)
 
     return serialized

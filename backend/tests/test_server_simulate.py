@@ -12,8 +12,8 @@ import pytest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 
-from server import app
-from models import (
+from backend.server import app
+from backend.models import (
     FactoryConfig,
     Machine,
     Job,
@@ -92,7 +92,7 @@ class TestSimulateEndpoint:
             return mock_pipeline_result
 
         monkeypatch.setattr(
-            "server.run_onboarded_pipeline", mock_run_onboarded_pipeline
+            "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
         )
 
         response = client.post(
@@ -121,7 +121,7 @@ class TestSimulateEndpoint:
             return mock_pipeline_result
 
         monkeypatch.setattr(
-            "server.run_onboarded_pipeline", mock_run_onboarded_pipeline
+            "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
         )
 
         response = client.post(
@@ -173,7 +173,7 @@ class TestSimulateEndpoint:
             return mock_pipeline_result
 
         monkeypatch.setattr(
-            "server.run_onboarded_pipeline", mock_run_onboarded_pipeline
+            "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
         )
 
         response = client.post(
@@ -216,7 +216,7 @@ class TestSimulateEndpoint:
             return mock_pipeline_result
 
         monkeypatch.setattr(
-            "server.run_onboarded_pipeline", mock_run_onboarded_pipeline
+            "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
         )
 
         response = client.post(

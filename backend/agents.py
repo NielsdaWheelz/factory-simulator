@@ -31,9 +31,9 @@ import logging
 from typing import Iterable
 from pydantic import BaseModel
 
-from models import ScenarioSpec, ScenarioType, ScenarioMetrics, FactoryConfig
-from world import build_toy_factory
-from llm import call_llm_json
+from .models import ScenarioSpec, ScenarioType, ScenarioMetrics, FactoryConfig
+from .world import build_toy_factory
+from .llm import call_llm_json
 
 logger = logging.getLogger(__name__)
 

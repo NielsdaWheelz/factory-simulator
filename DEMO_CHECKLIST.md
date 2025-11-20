@@ -14,7 +14,7 @@ Use this checklist to verify the system is ready for demonstration or deployment
 
 ```bash
 # In repository root
-uvicorn server:app --reload
+uvicorn backend.server:app --reload
 ```
 
 - [ ] Backend starts without errors
@@ -90,7 +90,7 @@ npm run dev
 ### Backend CORS
 
 - [ ] Default behavior: CORS allows `*` (localhost dev works)
-- [ ] Set `BACKEND_CORS_ORIGINS=https://example.com` in `.env`
+- [ ] Set `BACKEND_CORS_ORIGINS=https://example.com` in `backend/.env`
 - [ ] Verify backend respects this on next start
 
 ### Frontend API URL
@@ -102,15 +102,15 @@ npm run dev
 
 ## Deployment Readiness
 
-- [ ] `.env.example` exists at repo root with comments
+- [ ] `backend/.env.example` exists with comments
 - [ ] `frontend/.env.example` exists with comments
 - [ ] No real secrets or API keys committed (check `.gitignore`)
-- [ ] README.md has clear "Running the API" and "Frontend" sections
+- [ ] README.md has clear "Backend" and "Frontend" setup sections
 - [ ] DEMO_CHECKLIST.md is comprehensive and follows this template
 
 ## Final Verification
 
-- [ ] All tests pass: `pytest tests/ -v` (in repo root)
+- [ ] All tests pass: `python -m pytest` (in repo root)
 - [ ] No TypeScript errors in frontend (build should succeed: `npm run build`)
 - [ ] Git history is clean and PR description is clear
 

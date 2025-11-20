@@ -9,7 +9,7 @@ All times are in integer hours; no fractional scheduling.
 
 import logging
 from copy import deepcopy
-from models import FactoryConfig, SimulationResult, ScheduledStep, ScenarioSpec, ScenarioType, Job, Step
+from .models import FactoryConfig, SimulationResult, ScheduledStep, ScenarioSpec, ScenarioType, Job, Step
 
 logger = logging.getLogger(__name__)
 
