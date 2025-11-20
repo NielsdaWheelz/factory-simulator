@@ -250,10 +250,18 @@ class TestNormalizeFactoryIntegration:
 
     def test_onboarded_pipeline_with_invalid_factory_text_fallback(self):
         """Verify pipeline handles factories that normalize to toy factory."""
-        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+        # Create a factory that will normalize to empty
+        invalid_factory = FactoryConfig(
+            machines=[],
+            jobs=[]
+        )
+
+        with patch("backend.agents.OnboardingAgent.run") as mock_onboarding, \
+             patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
+            mock_onboarding.return_value = invalid_factory
             mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
             mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
@@ -263,7 +271,7 @@ class TestNormalizeFactoryIntegration:
                 situation_text="test"
             )
 
-            # In PR1, OnboardingAgent stub always returns toy_factory
+            # When OnboardingAgent returns an empty factory, it normalizes to toy_factory
             # So used_default_factory should be True
             assert output["meta"].used_default_factory is True
 
@@ -273,10 +281,15 @@ class TestMetadataTracking:
 
     def test_onboarded_pipeline_used_default_factory_flag(self):
         """Verify used_default_factory flag is set correctly."""
-        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+        # Mock OnboardingAgent to return toy factory (simulating onboarding error)
+        toy_factory = build_toy_factory()
+
+        with patch("backend.agents.OnboardingAgent.run") as mock_onboarding, \
+             patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
+            mock_onboarding.return_value = toy_factory
             mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
             mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
@@ -286,15 +299,31 @@ class TestMetadataTracking:
                 situation_text="test"
             )
 
-            # In PR1, this should always be True (stub returns toy factory)
+            # When OnboardingAgent returns toy factory, used_default_factory is True
             assert isinstance(output["meta"].used_default_factory, bool)
+            assert output["meta"].used_default_factory is True
 
     def test_onboarded_pipeline_onboarding_errors_empty_in_pr1(self):
-        """Verify onboarding_errors is empty in PR1 (no LLM yet)."""
-        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+        """Verify onboarding_errors is empty when OnboardingAgent succeeds."""
+        # Mock OnboardingAgent to return a valid factory (success case)
+        valid_factory = FactoryConfig(
+            machines=[Machine(id="M1", name="Machine 1")],
+            jobs=[
+                Job(
+                    id="J1",
+                    name="Job 1",
+                    steps=[Step(machine_id="M1", duration_hours=2)],
+                    due_time_hour=24,
+                )
+            ]
+        )
+
+        with patch("backend.agents.OnboardingAgent.run") as mock_onboarding, \
+             patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
+            mock_onboarding.return_value = valid_factory
             mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
             mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
@@ -304,7 +333,7 @@ class TestMetadataTracking:
                 situation_text="test"
             )
 
-            # In PR1, onboarding_errors should always be empty
+            # When OnboardingAgent succeeds with valid factory, onboarding_errors should be empty
             assert output["meta"].onboarding_errors == []
 
 
