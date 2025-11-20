@@ -29,6 +29,32 @@ from .onboarding import normalize_factory
 logger = logging.getLogger(__name__)
 
 
+def is_toy_factory(factory: FactoryConfig) -> bool:
+    """
+    Detect if a factory is the toy factory (default) based on structure.
+
+    The toy factory has:
+    - 3 machines with IDs M1, M2, M3
+    - 3 jobs with IDs J1, J2, J3
+
+    This structural check is used to determine if normalization or the onboarding agent
+    returned the default toy factory (indicating fallback or stub behavior).
+
+    Args:
+        factory: FactoryConfig to check
+
+    Returns:
+        True if this is the toy factory, False otherwise
+    """
+    if len(factory.machines) != 3 or len(factory.jobs) != 3:
+        return False
+
+    machine_ids = {m.id for m in factory.machines}
+    job_ids = {j.id for j in factory.jobs}
+
+    return machine_ids == {"M1", "M2", "M3"} and job_ids == {"J1", "J2", "J3"}
+
+
 def run_pipeline(user_text: str) -> dict:
     """Run the full simulation pipeline for a given free-text user description.
 
@@ -218,35 +244,31 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
     # Step 1: Instantiate OnboardingAgent and get initial factory config
     logger.info("Step 1️⃣ Running OnboardingAgent (parsing factory description)...")
     onboarding_agent = OnboardingAgent()
-    initial_factory = onboarding_agent.run(factory_text)
+    raw_factory = onboarding_agent.run(factory_text)
     logger.info(
-        f"   ✓ OnboardingAgent returned factory: {len(initial_factory.machines)} machines, {len(initial_factory.jobs)} jobs"
+        f"   ✓ OnboardingAgent returned factory: {len(raw_factory.machines)} machines, {len(raw_factory.jobs)} jobs"
     )
 
     # Step 2: Normalize the factory
     logger.info("Step 2️⃣ Normalizing factory configuration...")
-    normalized_factory, normalization_warnings = normalize_factory(initial_factory)
-
-    # Track if we used the default factory (either from stub or fallback)
-    # In PR1, the stub always returns toy factory, so this is always True initially
-    # After normalization, check if we got the toy factory as a result
-    logger.info("   Computing if default factory was used...")
-    toy_factory = build_toy_factory()
-    used_default_factory = (
-        (len(normalized_factory.machines) == len(toy_factory.machines))
-        and (len(normalized_factory.jobs) == len(toy_factory.jobs))
-        and all(
-            m1.id == m2.id
-            for m1, m2 in zip(normalized_factory.machines, toy_factory.machines)
-        )
-        and all(
-            j1.id == j2.id
-            for j1, j2 in zip(normalized_factory.jobs, toy_factory.jobs)
-        )
+    normalized_factory, normalization_warnings = normalize_factory(raw_factory)
+    logger.debug(
+        f"   After normalization: {len(normalized_factory.machines)} machines, {len(normalized_factory.jobs)} jobs"
     )
 
+    # Step 3: Determine fallback level
+    # Fallback is needed if the normalized factory is empty (no machines or no jobs)
+    if not normalized_factory.machines or not normalized_factory.jobs:
+        logger.debug("Fallback triggered: normalized factory is empty")
+        final_factory = build_toy_factory()
+        used_default_factory = True
+    else:
+        final_factory = normalized_factory
+        # Check if the normalized factory is structurally the toy factory
+        used_default_factory = is_toy_factory(final_factory)
+
     logger.info(
-        f"   ✓ Factory normalized: {len(normalized_factory.machines)} machines, {len(normalized_factory.jobs)} jobs "
+        f"   ✓ Factory prepared: {len(final_factory.machines)} machines, {len(final_factory.jobs)} jobs "
         f"(used_default={used_default_factory})"
     )
 
@@ -265,7 +287,7 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
 
     # Step 4: Use IntentAgent to parse situation text into a base ScenarioSpec
     logger.info("Step 4️⃣ Running IntentAgent (parsing situation text → scenario intent)...")
-    base_spec, intent_context = intent_agent.run(situation_text, factory=normalized_factory)
+    base_spec, intent_context = intent_agent.run(situation_text, factory=final_factory)
     logger.info(
         f"   ✓ IntentAgent result: type={base_spec.scenario_type.value}"
     )
@@ -273,7 +295,7 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
 
     # Step 5: Use FuturesAgent to expand into candidate scenarios
     logger.info("Step 5️⃣ Running FuturesAgent (expanding to candidate scenarios)...")
-    specs, futures_context = futures_agent.run(base_spec, factory=normalized_factory)
+    specs, futures_context = futures_agent.run(base_spec, factory=final_factory)
     if not specs:
         logger.error("❌ FuturesAgent returned no scenarios!")
         raise RuntimeError("FuturesAgent returned no scenarios.")
@@ -289,12 +311,12 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
     for i, spec in enumerate(specs):
         logger.debug(f"   [Scenario {i+1}/{len(specs)}] Running simulation...")
         # Run simulation
-        result: SimulationResult = simulate(normalized_factory, spec)
+        result: SimulationResult = simulate(final_factory, spec)
         results.append(result)
 
         # Compute metrics
         logger.debug(f"   [Scenario {i+1}/{len(specs)}] Computing metrics...")
-        metrics: ScenarioMetrics = compute_metrics(normalized_factory, result)
+        metrics: ScenarioMetrics = compute_metrics(final_factory, result)
         metrics_list.append(metrics)
 
         # Log scenario metrics
@@ -344,7 +366,7 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
 
     logger.info("=" * 80)
     logger.info("✅ run_onboarded_pipeline completed successfully!")
-    logger.info(f"   Factory: {len(normalized_factory.machines)} machines, {len(normalized_factory.jobs)} jobs")
+    logger.info(f"   Factory: {len(final_factory.machines)} machines, {len(final_factory.jobs)} jobs")
     logger.info(f"   Scenarios: {len(specs)}")
     logger.info(f"   Used default factory: {used_default_factory}")
     logger.info("=" * 80)
@@ -359,7 +381,7 @@ def run_onboarded_pipeline(factory_text: str, situation_text: str) -> dict:
 
     # Return all outputs in the structured format
     return {
-        "factory": normalized_factory,
+        "factory": final_factory,
         "situation_text": situation_text,
         "specs": specs,
         "metrics": metrics_list,
