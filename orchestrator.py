@@ -13,11 +13,14 @@ The run_pipeline function is a coordinator that runs multiple scenarios,
 builds a context summary, and produces a comprehensive briefing.
 """
 
+import logging
 from world import build_toy_factory
 from sim import simulate
 from metrics import compute_metrics
 from agents import IntentAgent, FuturesAgent, BriefingAgent
 from models import FactoryConfig, ScenarioSpec, SimulationResult, ScenarioMetrics
+
+logger = logging.getLogger(__name__)
 
 
 def run_pipeline(user_text: str) -> dict:
@@ -49,6 +52,9 @@ def run_pipeline(user_text: str) -> dict:
     Raises:
         RuntimeError: If FuturesAgent returns no scenarios.
     """
+    # Log incoming user text (truncated for safety)
+    logger.info("run_pipeline user_text=%r", user_text[:200])
+
     # Step 1: Build the baseline factory config
     factory: FactoryConfig = build_toy_factory()
 
@@ -66,11 +72,20 @@ def run_pipeline(user_text: str) -> dict:
         # Guard against empty list (though fallback in FuturesAgent should prevent this)
         raise RuntimeError("FuturesAgent returned no scenarios.")
 
+    # Log base spec and number of specs
+    logger.info(
+        "base_spec: type=%s rush_job_id=%s slowdown_factor=%s",
+        base_spec.scenario_type,
+        base_spec.rush_job_id,
+        base_spec.slowdown_factor,
+    )
+    logger.info("number of scenario specs from FuturesAgent: %d", len(specs))
+
     # Step 4: For each scenario, run simulation and compute metrics
     results: list[SimulationResult] = []
     metrics_list: list[ScenarioMetrics] = []
 
-    for spec in specs:
+    for i, spec in enumerate(specs):
         # Run simulation
         result: SimulationResult = simulate(factory, spec)
         results.append(result)
@@ -79,12 +94,27 @@ def run_pipeline(user_text: str) -> dict:
         metrics: ScenarioMetrics = compute_metrics(factory, result)
         metrics_list.append(metrics)
 
+        # Log scenario metrics
+        late_jobs = sum(1 for v in metrics.job_lateness.values() if v > 0)
+        logger.info(
+            "scenario[%d]: type=%s rush_job_id=%s slowdown_factor=%s makespan=%d late_jobs=%d bottleneck=%s util=%.3f",
+            i,
+            spec.scenario_type,
+            spec.rush_job_id,
+            spec.slowdown_factor,
+            metrics.makespan_hour,
+            late_jobs,
+            metrics.bottleneck_machine_id,
+            metrics.bottleneck_utilization,
+        )
+
     # Step 5: Choose primary scenario (first in list)
     primary_spec = specs[0]
     primary_metrics = metrics_list[0]
 
-    # Step 6: Build context summary for BriefingAgent
-    context_lines = ["You evaluated the following scenarios:"]
+    # Step 6: Build context summary for BriefingAgent with user_text and scenarios
+    context_lines = [f"User Request: {user_text}", ""]
+    context_lines.append("You evaluated the following scenarios:")
     for i, (spec, metrics) in enumerate(zip(specs, metrics_list), start=1):
         scenario_desc = f"\n{i}) {spec.scenario_type.value}"
         if spec.rush_job_id:

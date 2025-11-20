@@ -10,7 +10,113 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from models import ScenarioSpec, ScenarioType, ScenarioMetrics
-from agents import IntentAgent, FuturesAgent, BriefingAgent, FuturesResponse, BriefingResponse
+from agents import IntentAgent, FuturesAgent, BriefingAgent, FuturesResponse, BriefingResponse, normalize_scenario_spec
+from world import build_toy_factory
+
+
+class TestNormalizeScenarioSpec:
+    """Test normalize_scenario_spec function."""
+
+    def test_m2_slowdown_clears_rush_job_id(self):
+        """Test that M2_SLOWDOWN with rush_job_id set gets rush_job_id cleared."""
+        factory = build_toy_factory()
+
+        # LLM incorrectly produced M2_SLOWDOWN with rush_job_id set
+        # Use model_construct to bypass validation (simulating LLM returning invalid JSON)
+        spec = ScenarioSpec.model_construct(
+            scenario_type=ScenarioType.M2_SLOWDOWN,
+            rush_job_id="J1",  # This shouldn't be here
+            slowdown_factor=2,
+        )
+
+        # Normalize should clear the rush_job_id
+        normalized = normalize_scenario_spec(spec, factory)
+
+        assert normalized.scenario_type == ScenarioType.M2_SLOWDOWN
+        assert normalized.rush_job_id is None
+        assert normalized.slowdown_factor == 2
+
+    def test_rush_arrives_with_valid_job_id_unchanged(self):
+        """Test that RUSH_ARRIVES with valid rush_job_id is unchanged."""
+        factory = build_toy_factory()
+
+        spec = ScenarioSpec(
+            scenario_type=ScenarioType.RUSH_ARRIVES,
+            rush_job_id="J1",
+            slowdown_factor=None,
+        )
+
+        normalized = normalize_scenario_spec(spec, factory)
+
+        assert normalized.scenario_type == ScenarioType.RUSH_ARRIVES
+        assert normalized.rush_job_id == "J1"
+        assert normalized.slowdown_factor is None
+
+    def test_rush_arrives_with_invalid_job_id_downgrades_to_baseline(self):
+        """Test that RUSH_ARRIVES with invalid rush_job_id downgrades to BASELINE."""
+        factory = build_toy_factory()
+
+        # J99 doesn't exist in the factory
+        spec = ScenarioSpec(
+            scenario_type=ScenarioType.RUSH_ARRIVES,
+            rush_job_id="J99",
+            slowdown_factor=None,
+        )
+
+        normalized = normalize_scenario_spec(spec, factory)
+
+        assert normalized.scenario_type == ScenarioType.BASELINE
+        assert normalized.rush_job_id is None
+        assert normalized.slowdown_factor is None
+
+    def test_rush_arrives_with_none_rush_job_id_downgrades_to_baseline(self):
+        """Test that RUSH_ARRIVES with None rush_job_id downgrades to BASELINE."""
+        factory = build_toy_factory()
+
+        # Use model_construct to bypass validation (simulating invalid LLM JSON)
+        spec = ScenarioSpec.model_construct(
+            scenario_type=ScenarioType.RUSH_ARRIVES,
+            rush_job_id=None,
+            slowdown_factor=None,
+        )
+
+        normalized = normalize_scenario_spec(spec, factory)
+
+        assert normalized.scenario_type == ScenarioType.BASELINE
+        assert normalized.rush_job_id is None
+        assert normalized.slowdown_factor is None
+
+    def test_baseline_unchanged(self):
+        """Test that BASELINE specs are unchanged."""
+        factory = build_toy_factory()
+
+        spec = ScenarioSpec(
+            scenario_type=ScenarioType.BASELINE,
+            rush_job_id=None,
+            slowdown_factor=None,
+        )
+
+        normalized = normalize_scenario_spec(spec, factory)
+
+        assert normalized.scenario_type == ScenarioType.BASELINE
+        assert normalized.rush_job_id is None
+        assert normalized.slowdown_factor is None
+
+    def test_m2_slowdown_with_none_rush_job_id_unchanged(self):
+        """Test that M2_SLOWDOWN with None rush_job_id is unchanged."""
+        factory = build_toy_factory()
+
+        spec = ScenarioSpec(
+            scenario_type=ScenarioType.M2_SLOWDOWN,
+            rush_job_id=None,
+            slowdown_factor=3,
+        )
+
+        normalized = normalize_scenario_spec(spec, factory)
+
+        assert normalized.scenario_type == ScenarioType.M2_SLOWDOWN
+        assert normalized.rush_job_id is None
+        assert normalized.slowdown_factor == 3
 
 
 class TestIntentAgentWithMockedLLM:
@@ -84,6 +190,43 @@ class TestIntentAgentWithMockedLLM:
 
             # Should fallback to BASELINE
             assert result.scenario_type == ScenarioType.BASELINE
+
+    def test_intent_agent_normalizes_m2_slowdown_with_rush_job_id(self):
+        """Test that IntentAgent normalizes M2_SLOWDOWN with rush_job_id to valid spec."""
+        # LLM returns M2_SLOWDOWN with rush_job_id set (invalid combo)
+        # Use model_construct to bypass validation (simulating LLM returning invalid JSON)
+        invalid_spec = ScenarioSpec.model_construct(
+            scenario_type=ScenarioType.M2_SLOWDOWN,
+            rush_job_id="J1",  # Invalid with M2_SLOWDOWN
+            slowdown_factor=2,
+        )
+
+        with patch("agents.call_llm_json", return_value=invalid_spec):
+            agent = IntentAgent()
+            result = agent.run("M2 is slow and J1 needs rushing")
+
+            # Should be normalized to valid M2_SLOWDOWN (no rush_job_id)
+            assert result.scenario_type == ScenarioType.M2_SLOWDOWN
+            assert result.rush_job_id is None
+            assert result.slowdown_factor == 2
+
+    def test_intent_agent_normalizes_rush_with_invalid_job_id(self):
+        """Test that IntentAgent normalizes RUSH_ARRIVES with invalid job ID to BASELINE."""
+        # LLM returns RUSH_ARRIVES with non-existent job ID
+        invalid_spec = ScenarioSpec(
+            scenario_type=ScenarioType.RUSH_ARRIVES,
+            rush_job_id="J99",  # Invalid job ID
+            slowdown_factor=None,
+        )
+
+        with patch("agents.call_llm_json", return_value=invalid_spec):
+            agent = IntentAgent()
+            result = agent.run("rush order for J99")
+
+            # Should downgrade to BASELINE
+            assert result.scenario_type == ScenarioType.BASELINE
+            assert result.rush_job_id is None
+            assert result.slowdown_factor is None
 
 
 class TestFuturesAgentWithMockedLLM:

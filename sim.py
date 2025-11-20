@@ -7,8 +7,11 @@ with greedy machine allocation to produce SimulationResult objects.
 All times are in integer hours; no fractional scheduling.
 """
 
+import logging
 from copy import deepcopy
 from models import FactoryConfig, SimulationResult, ScheduledStep, ScenarioSpec, ScenarioType, Job, Step
+
+logger = logging.getLogger(__name__)
 
 
 def simulate_baseline(factory: FactoryConfig) -> SimulationResult:
@@ -165,5 +168,6 @@ def simulate(factory: FactoryConfig, spec: ScenarioSpec) -> SimulationResult:
     Returns:
         SimulationResult from running the scheduler on the modified factory
     """
+    logger.debug("simulate called for scenario_type=%s", spec.scenario_type)
     modified_factory = apply_scenario(factory, spec)
     return simulate_baseline(modified_factory)
