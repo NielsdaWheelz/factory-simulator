@@ -93,6 +93,17 @@
   cursor: not-allowed;
 }
 
+/* Error Banner */
+.error-banner {
+  padding: 14px 20px;
+  background-color: #ffe6e6;
+  border: 1px solid #ff6b6b;
+  border-radius: 4px;
+  color: #c92a2a;
+  font-size: 14px;
+  font-weight: 500;
+}
+
 /* Output Panels */
 .output-panels {
   display: grid;
