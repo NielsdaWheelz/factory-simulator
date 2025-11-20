@@ -7,6 +7,7 @@ Tests verify:
 - Invalid machine references are dropped
 - Jobs with no valid steps are dropped
 - Fallback to toy factory when factory becomes empty
+- Normalization warnings are properly returned
 """
 
 import pytest
@@ -31,9 +32,10 @@ class TestNormalizeFactoryDurationFix:
                 )
             ],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         assert len(result.jobs) == 1
         assert result.jobs[0].steps[0].duration_hours == 1
+        assert len(warnings) > 0  # Should have a warning about fixed duration
 
     def test_negative_duration_becomes_one(self):
         """Step with negative duration_hours should become 1."""
@@ -48,7 +50,7 @@ class TestNormalizeFactoryDurationFix:
                 )
             ],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         assert len(result.jobs) == 1
         assert result.jobs[0].steps[0].duration_hours == 1
 
@@ -65,7 +67,7 @@ class TestNormalizeFactoryDurationFix:
                 )
             ],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         assert len(result.jobs) == 1
         assert result.jobs[0].steps[0].duration_hours == 3
 
@@ -87,7 +89,7 @@ class TestNormalizeFactoryDurationFix:
                 )
             ],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         assert len(result.jobs) == 1
         assert result.jobs[0].steps[0].duration_hours == 2
         assert result.jobs[0].steps[1].duration_hours == 1
@@ -111,7 +113,7 @@ class TestNormalizeFactoryDueTimeFix:
                 )
             ],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         assert len(result.jobs) == 1
         assert result.jobs[0].due_time_hour == 24
 
@@ -128,7 +130,7 @@ class TestNormalizeFactoryDueTimeFix:
                 )
             ],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         assert len(result.jobs) == 1
         assert result.jobs[0].due_time_hour == 10
 
@@ -145,7 +147,7 @@ class TestNormalizeFactoryDueTimeFix:
                 )
             ],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         assert len(result.jobs) == 1
         assert result.jobs[0].due_time_hour == 0
 
@@ -170,7 +172,7 @@ class TestNormalizeFactoryInvalidMachines:
                 )
             ],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         assert len(result.jobs) == 1
         assert len(result.jobs[0].steps) == 2
         assert all(s.machine_id == "M1" for s in result.jobs[0].steps)
@@ -191,9 +193,10 @@ class TestNormalizeFactoryInvalidMachines:
                 )
             ],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         # Job should be dropped, fallback to toy factory
         assert result == build_toy_factory()
+        assert any("empty factory" in w.lower() for w in warnings)
 
     def test_multiple_jobs_one_invalid(self):
         """Multiple jobs where one becomes empty should drop only that job."""
@@ -223,7 +226,7 @@ class TestNormalizeFactoryInvalidMachines:
                 ),
             ],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         assert len(result.jobs) == 2
         job_ids = {j.id for j in result.jobs}
         assert job_ids == {"J1", "J3"}
@@ -245,7 +248,7 @@ class TestNormalizeFactoryFallback:
                 )
             ],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         assert result == build_toy_factory()
 
     def test_empty_jobs_falls_back(self):
@@ -254,7 +257,7 @@ class TestNormalizeFactoryFallback:
             machines=[Machine(id="M1", name="Machine 1")],
             jobs=[],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         assert result == build_toy_factory()
 
     def test_all_jobs_become_empty_falls_back(self):
@@ -276,7 +279,7 @@ class TestNormalizeFactoryFallback:
                 ),
             ],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         assert result == build_toy_factory()
 
 
@@ -301,7 +304,7 @@ class TestNormalizeFactoryImmutability:
         original_due_time = original.jobs[0].due_time_hour
 
         # Normalize
-        result = normalize_factory(original)
+        result, warnings = normalize_factory(original)
 
         # Verify input was not mutated
         assert original.jobs[0].steps[0].duration_hours == original_duration
@@ -323,7 +326,7 @@ class TestNormalizeFactoryImmutability:
                 )
             ],
         )
-        result = normalize_factory(factory)
+        result, warnings = normalize_factory(factory)
         assert result is not factory
 
 
@@ -347,11 +350,12 @@ class TestNormalizeFactoryDeterminism:
                 )
             ],
         )
-        result1 = normalize_factory(factory)
-        result2 = normalize_factory(factory)
+        result1, warnings1 = normalize_factory(factory)
+        result2, warnings2 = normalize_factory(factory)
 
         assert result1.machines == result2.machines
         assert len(result1.jobs) == len(result2.jobs)
+        assert warnings1 == warnings2  # Warnings should be identical
         if result1.jobs:
             assert result1.jobs[0].steps == result2.jobs[0].steps
             assert result1.jobs[0].due_time_hour == result2.jobs[0].due_time_hour

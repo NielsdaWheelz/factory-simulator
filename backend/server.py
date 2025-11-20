@@ -95,8 +95,17 @@ def simulate(req: SimulateRequest) -> dict:
     logger.info(f"   Briefing length: {len(result['briefing'])} chars")
     logger.info("   Serializing response...")
 
+    # Filter result to only include API contract keys: factory, specs, metrics, briefing, meta
+    api_response = {
+        "factory": result["factory"],
+        "specs": result["specs"],
+        "metrics": result["metrics"],
+        "briefing": result["briefing"],
+        "meta": result["meta"],
+    }
+
     # Ensure result is JSON serializable
-    serialized = serialize_simulation_result(result)
+    serialized = serialize_simulation_result(api_response)
 
     logger.info("=" * 80)
     logger.info("✅ Response serialized and ready to send")

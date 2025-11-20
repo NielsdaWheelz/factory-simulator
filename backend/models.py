@@ -117,3 +117,50 @@ class ScenarioMetrics(BaseModel):
         if not (0.0 <= self.bottleneck_utilization <= 1.0):
             raise ValueError("bottleneck_utilization must be between 0.0 and 1.0")
         return self
+
+
+class OnboardingMeta(BaseModel):
+    """Metadata from the onboarding process.
+
+    Tracks:
+    - Whether the default (toy) factory was used as a fallback
+    - Any errors encountered during normalization
+    - Any assumptions inferred by the LLM during interpretation
+    """
+
+    used_default_factory: bool = Field(
+        ..., description="True if fallback to toy factory was used; False if onboarded/normalized factory is usable"
+    )
+    onboarding_errors: list[str] = Field(
+        default_factory=list,
+        description="List of errors/warnings from normalization (empty if no repairs needed)"
+    )
+    inferred_assumptions: list[str] = Field(
+        default_factory=list,
+        description="List of assumptions inferred by the LLM during interpretation (empty if none)"
+    )
+
+
+class SimulateResponse(BaseModel):
+    """HTTP response contract for POST /api/simulate endpoint.
+
+    This is the frozen contract for the simulate endpoint response shape.
+    Future PRs may extend fields but must preserve these keys and their types.
+    """
+
+    factory: FactoryConfig = Field(..., description="The onboarded and normalized factory configuration")
+    specs: list[ScenarioSpec] = Field(..., description="List of scenario specifications to evaluate")
+    metrics: list[ScenarioMetrics] = Field(..., description="Performance metrics for each scenario (same order as specs)")
+    briefing: str = Field(..., description="Markdown briefing summarizing the scenarios and recommendations")
+    meta: OnboardingMeta = Field(..., description="Metadata from the onboarding process")
+
+
+class OnboardingResponse(BaseModel):
+    """HTTP response contract for POST /api/onboard endpoint (future implementation).
+
+    This is the frozen contract for the onboard endpoint response shape.
+    Used in a future sprint to implement POST /api/onboard.
+    """
+
+    factory: FactoryConfig = Field(..., description="The onboarded and normalized factory configuration")
+    meta: OnboardingMeta = Field(..., description="Metadata from the onboarding process")
