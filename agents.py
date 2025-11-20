@@ -22,11 +22,14 @@ All agents call llm.call_llm_json for LLM communication.
 Tests will monkeypatch call_llm_json to avoid real network calls.
 """
 
+import logging
 from pydantic import BaseModel
 
 from models import ScenarioSpec, ScenarioType, ScenarioMetrics
 from world import build_toy_factory
 from llm import call_llm_json
+
+logger = logging.getLogger(__name__)
 
 
 # Internal DTOs for multi-object LLM responses
@@ -95,6 +98,7 @@ You will output ONLY valid JSON matching the schema below. Do not add explanatio
 
         except Exception as e:
             # Fallback to BASELINE on any error (LLM unavailable, parsing failure, etc.)
+            logger.warning("IntentAgent LLM call failed; falling back to BASELINE: %s", e)
             return ScenarioSpec(scenario_type=ScenarioType.BASELINE)
 
 
@@ -176,8 +180,9 @@ All slowdown_factor values must be >= 2.
 
             return scenarios
 
-        except Exception:
+        except Exception as e:
             # Fallback to [spec] on any error
+            logger.warning("FuturesAgent LLM call failed; falling back to [spec]: %s", e)
             return [spec]
 
 
@@ -218,7 +223,7 @@ Job Lateness: {dict(metrics.job_lateness)}"""
 simulation metrics into a clear, actionable morning briefing for a plant manager.
 
 Use ONLY the data provided. Do not invent jobs, machines, or scenarios.
-Output markdown following the template below.
+You will output ONLY valid JSON matching the schema below. Do not add explanation or prose.
 
 # FactoryConfig Summary
 Jobs: {job_summary}
@@ -227,28 +232,19 @@ Machines: {machine_summary}
 # Primary Scenario Metrics
 {metrics_summary}{context_str}
 
-# Template (do not skip sections)
-# Morning Briefing
+# Schema
+{{
+  "markdown": "# Morning Briefing\n\n## Today at a Glance\n[1-2 sentences summarizing the main risk or recommendation]\n\n## Key Risks\n[3-5 bullet points on lateness, bottlenecks, utilization]\n\n## Recommended Actions\n[2-4 bullet points with concrete, actionable steps]\n\n## Limitations of This Model\n[2-3 sentences on scope and limitations of this deterministic model]"
+}}
 
-## Today at a Glance
-[1-2 sentences summarizing the main risk or recommendation]
-
-## Key Risks
-[3-5 bullet points on lateness, bottlenecks, utilization]
-
-## Recommended Actions
-[2-4 bullet points with concrete, actionable steps]
-
-## Limitations of This Model
-[2-3 sentences on scope and limitations of this deterministic model]
-
-Output only markdown following the template above. Be concise."""
+# Respond with ONLY the JSON object, no explanation."""
 
             response = call_llm_json(prompt, BriefingResponse)
             return response.markdown
 
-        except Exception:
+        except Exception as e:
             # Fallback to deterministic template on error
+            logger.warning("BriefingAgent LLM call failed; using deterministic template: %s", e)
             lines = [
                 "# Morning Briefing",
                 "",

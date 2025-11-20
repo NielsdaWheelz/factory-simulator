@@ -9,11 +9,14 @@ allowing tests to monkeypatch this function without requiring the openai package
 """
 
 import json
+import logging
 from typing import Type, TypeVar
 
 from pydantic import BaseModel
 
 from config import get_openai_api_key, OPENAI_MODEL
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -54,20 +57,26 @@ def call_llm_json(prompt: str, schema: Type[T]) -> T:
     api_key = get_openai_api_key()
     client = OpenAI(api_key=api_key)
 
-    response = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
-            {"role": "system", "content": "You are a precise JSON-emitting assistant."},
-            {"role": "user", "content": prompt},
-        ],
-        response_format={"type": "json_object"},
-    )
+    logger.info("calling LLM for schema %s", schema.__name__)
 
-    content = response.choices[0].message.content
-    if content is None:
-        raise RuntimeError("LLM response was empty")
+    try:
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": "You are a precise JSON-emitting assistant."},
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
+        )
 
-    data = json.loads(content)
-    parsed = schema.model_validate(data)
+        content = response.choices[0].message.content
+        if content is None:
+            raise RuntimeError("LLM response was empty")
 
-    return parsed
+        data = json.loads(content)
+        parsed = schema.model_validate(data)
+
+        return parsed
+    except Exception:
+        logger.exception("LLM call failed")
+        raise
