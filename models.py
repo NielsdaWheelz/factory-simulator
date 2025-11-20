@@ -1,5 +1,6 @@
 from enum import Enum
-from pydantic import BaseModel, Field
+from typing import Optional
+from pydantic import BaseModel, Field, model_validator
 
 
 class ScenarioType(str, Enum):
@@ -59,3 +60,37 @@ class SimulationResult(BaseModel):
     scheduled_steps: list[ScheduledStep] = Field(..., description="All scheduled steps")
     job_completion_times: dict[str, int] = Field(..., description="Job ID -> completion hour")
     makespan_hour: int = Field(..., description="Total hours from 0 to last completion")
+
+
+class ScenarioSpec(BaseModel):
+    """
+    Specification of a single what-if scenario to apply to the baseline factory.
+
+    - BASELINE: no changes to the factory.
+    - RUSH_ARRIVES: treat an existing job as a rush/prioritized job by tightening its due time.
+    - M2_SLOWDOWN: slow down machine M2 by an integer slowdown_factor >= 2.
+    """
+
+    scenario_type: ScenarioType = Field(..., description="Type of scenario to apply")
+    rush_job_id: Optional[str] = Field(default=None, description="Job ID for RUSH_ARRIVES scenario")
+    slowdown_factor: Optional[int] = Field(default=None, description="Slowdown multiplier for M2_SLOWDOWN scenario")
+
+    @model_validator(mode="after")
+    def validate_scenario_fields(self):
+        """Validate that scenario fields are consistent with scenario_type."""
+        if self.scenario_type == ScenarioType.BASELINE:
+            if self.rush_job_id is not None:
+                raise ValueError("BASELINE scenario must have rush_job_id=None")
+            if self.slowdown_factor is not None:
+                raise ValueError("BASELINE scenario must have slowdown_factor=None")
+        elif self.scenario_type == ScenarioType.RUSH_ARRIVES:
+            if self.rush_job_id is None or self.rush_job_id == "":
+                raise ValueError("RUSH_ARRIVES scenario requires a non-empty rush_job_id")
+            if self.slowdown_factor is not None:
+                raise ValueError("RUSH_ARRIVES scenario must have slowdown_factor=None")
+        elif self.scenario_type == ScenarioType.M2_SLOWDOWN:
+            if self.slowdown_factor is None or self.slowdown_factor < 2:
+                raise ValueError("M2_SLOWDOWN scenario requires slowdown_factor >= 2")
+            if self.rush_job_id is not None:
+                raise ValueError("M2_SLOWDOWN scenario must have rush_job_id=None")
+        return self

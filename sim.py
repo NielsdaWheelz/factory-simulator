@@ -7,7 +7,8 @@ with greedy machine allocation to produce SimulationResult objects.
 All times are in integer hours; no fractional scheduling.
 """
 
-from models import FactoryConfig, SimulationResult, ScheduledStep
+from copy import deepcopy
+from models import FactoryConfig, SimulationResult, ScheduledStep, ScenarioSpec, ScenarioType, Job, Step
 
 
 def simulate_baseline(factory: FactoryConfig) -> SimulationResult:
@@ -86,3 +87,83 @@ def simulate_baseline(factory: FactoryConfig) -> SimulationResult:
         job_completion_times=job_completion_times,
         makespan_hour=makespan_hour,
     )
+
+
+def apply_scenario(factory: FactoryConfig, spec: ScenarioSpec) -> FactoryConfig:
+    """
+    Return a modified FactoryConfig according to the given ScenarioSpec.
+
+    - BASELINE: return a deep copy of the original factory (for safety).
+    - RUSH_ARRIVES: prioritize an existing job by tightening its due_time_hour.
+    - M2_SLOWDOWN: slow machine M2 by multiplying its step durations by slowdown_factor.
+
+    Args:
+        factory: Original FactoryConfig (never mutated)
+        spec: ScenarioSpec defining the scenario to apply
+
+    Returns:
+        Modified FactoryConfig (a deep copy of the input)
+
+    Raises:
+        ValueError: If RUSH_ARRIVES references a non-existent job
+    """
+    # Always start with a deep copy to avoid mutating the original
+    factory_copy = deepcopy(factory)
+
+    if spec.scenario_type == ScenarioType.BASELINE:
+        # No changes, just return the copy
+        return factory_copy
+
+    elif spec.scenario_type == ScenarioType.RUSH_ARRIVES:
+        # Find the job by ID and tighten its due time
+        assert spec.rush_job_id is not None, "RUSH_ARRIVES requires rush_job_id"
+
+        rush_job = None
+        for job in factory_copy.jobs:
+            if job.id == spec.rush_job_id:
+                rush_job = job
+                break
+
+        if rush_job is None:
+            raise ValueError(f"Job '{spec.rush_job_id}' not found in factory")
+
+        # Compute the minimum existing due_time_hour across all jobs
+        earliest_due = min(job.due_time_hour for job in factory_copy.jobs)
+
+        # Tighten the rush job's due time to be earlier than the current minimum
+        rush_job.due_time_hour = max(0, earliest_due - 1)
+
+        return factory_copy
+
+    elif spec.scenario_type == ScenarioType.M2_SLOWDOWN:
+        # Slow down all M2 steps
+        assert spec.slowdown_factor is not None and spec.slowdown_factor >= 2, \
+            "M2_SLOWDOWN requires slowdown_factor >= 2"
+
+        for job in factory_copy.jobs:
+            for step in job.steps:
+                if step.machine_id == "M2":
+                    step.duration_hours = step.duration_hours * spec.slowdown_factor
+
+        return factory_copy
+
+    else:
+        raise ValueError(f"Unknown scenario type: {spec.scenario_type}")
+
+
+def simulate(factory: FactoryConfig, spec: ScenarioSpec) -> SimulationResult:
+    """
+    High-level simulation entrypoint.
+
+    Applies the given ScenarioSpec to the baseline factory config,
+    then runs the baseline scheduler on the modified config.
+
+    Args:
+        factory: Original FactoryConfig
+        spec: ScenarioSpec defining the scenario to apply
+
+    Returns:
+        SimulationResult from running the scheduler on the modified factory
+    """
+    modified_factory = apply_scenario(factory, spec)
+    return simulate_baseline(modified_factory)
