@@ -39,36 +39,218 @@ logger = logging.getLogger(__name__)
 
 
 class OnboardingAgent:
-    """Stub onboarding agent for factory description parsing.
+    """LLM-backed agent for factory description parsing.
 
-    In PR1 this does NOT call any LLM. It will be upgraded later to interpret
-    free-text factory descriptions and return a FactoryConfig. For now, it
-    simply returns the toy factory.
+    Takes a free-text factory description and interprets it into a FactoryConfig
+    using an LLM. Falls back gracefully to toy factory on any error.
+
+    Prompt includes:
+    - Time interpretation rules (by 10am → 10, etc.)
+    - Inference envelope (what's allowed/forbidden)
+    - Schema definition and example
+    - Explicit instructions for JSON output
+
+    Error handling: Never throws. Catches all exceptions and returns toy factory.
     """
 
     def run(self, factory_text: str) -> FactoryConfig:
         """
-        Parse factory text into a FactoryConfig (stub version, no LLM).
+        Parse factory text into a FactoryConfig using LLM.
 
-        In PR1:
-        - If factory_text is empty, return build_toy_factory()
-        - If factory_text is non-empty, log and return build_toy_factory()
+        Happy path:
+        - Calls call_llm_json with a carefully designed prompt
+        - Returns the LLM-produced FactoryConfig
+
+        On any error:
+        - Logs the error with truncated factory_text and error details
+        - Returns build_toy_factory() as fallback
+        - Does not raise
 
         Args:
-            factory_text: Free-form factory description (ignored in stub)
+            factory_text: Free-form factory description
 
         Returns:
-            FactoryConfig (currently always the toy factory)
+            FactoryConfig (from LLM on success, toy factory on error)
         """
-        if not factory_text.strip():
-            logger.info("OnboardingAgent: empty factory_text; returning toy factory")
+        # Log input
+        preview = factory_text[:200] if factory_text else "(empty)"
+        logger.debug(f"OnboardingAgent: received factory_text len={len(factory_text)}, preview={preview}...")
+
+        try:
+            # Build prompt
+            prompt = self._build_prompt(factory_text)
+
+            # Call LLM
+            cfg = call_llm_json(prompt=prompt, response_model=FactoryConfig)
+
+            # Log success
+            total_steps = sum(len(job.steps) for job in cfg.jobs)
+            logger.debug(
+                f"OnboardingAgent: produced factory with {len(cfg.machines)} machines, "
+                f"{len(cfg.jobs)} jobs, {total_steps} total steps"
+            )
+
+            return cfg
+
+        except Exception as e:
+            # Log error and return fallback
+            logger.warning(
+                f"OnboardingAgent: LLM call failed, falling back to toy factory: {type(e).__name__}: {str(e)[:100]}"
+            )
             return build_toy_factory()
 
-        logger.info(
-            "OnboardingAgent stub used; ignoring custom factory_text for now. "
-            "Will be upgraded with LLM parsing in a future PR."
-        )
-        return build_toy_factory()
+    def _build_prompt(self, factory_text: str) -> str:
+        """
+        Build the prompt for the LLM.
+
+        Includes:
+        - System message: role and constraints
+        - Schema definition: machines, jobs, steps structure
+        - Time interpretation rules: explicit mappings
+        - Inference envelope: allowed vs forbidden
+        - Worked example: clean factory description + output
+        - Output instructions: JSON-only, no prose
+
+        Args:
+            factory_text: Free-form factory description from user
+
+        Returns:
+            Full prompt ready for LLM
+        """
+        prompt = """You are a factory description parser. Your job is to interpret free-text descriptions
+of factories and extract a structured FactoryConfig.
+
+You will output ONLY a valid JSON object. No markdown, no prose, no extra keys, no explanation.
+
+# Schema Definition
+
+The output must match this structure:
+
+{
+  "machines": [
+    {
+      "id": "string (e.g., 'M1', 'M_ASSEMBLY')",
+      "name": "string (human-readable name)"
+    }
+  ],
+  "jobs": [
+    {
+      "id": "string (e.g., 'J1', 'J_WIDGET_A')",
+      "name": "string (human-readable name)",
+      "steps": [
+        {
+          "machine_id": "string (must match some machine.id)",
+          "duration_hours": "integer >= 1"
+        }
+      ],
+      "due_time_hour": "integer (0-24, but can exceed 24 if explicitly late)"
+    }
+  ]
+}
+
+# Time Interpretation Rules (MANDATORY)
+
+When you encounter time expressions in the factory description, apply these rules exactly:
+
+Due Times (must be integers):
+- "by 10am" or "10am" → 10
+- "by noon" or "noon" or "12pm" → 12
+- "by 3pm" or "3pm" → 15
+- "end of day" or "EOD" or "close" or "by close" → 24
+- Missing or ambiguous due time → 24 (default: end of day)
+- Negative due time → 0 or 24 per context
+
+Durations (must be integers):
+- "5 hours" or "5h" → 5
+- "about 3 hours" or "~3h" → 3 (round down; conservative)
+- "3-4 hours" or "3 to 4 hours" → 3 (take lower bound; conservative)
+- "quick" or "fast" → 1 (minimum)
+- "lengthy" or "long" → 3 or 4 (context-dependent; infer conservatively)
+- Missing or ambiguous duration → 1 (default: minimum viable)
+- Negative or zero duration → 1 (clamp upward)
+
+These are HARD RULES, not suggestions. Always apply them deterministically.
+
+# Inference Envelope (Scope Boundary)
+
+ALLOWED inferences:
+- Infer machine IDs from machine names (e.g., "Assembly line" → M_ASSEMBLY or M1)
+- Infer job IDs from job names or references (e.g., "Widget A" → J_WIDGET_A or J1)
+- Infer step durations and due times using the rules above
+- Infer job routing (steps) from text order (e.g., "Job A: Assembly → Drill → Pack")
+- Map machine names to machine IDs consistently (same name → same ID both times)
+
+FORBIDDEN (do NOT infer; ignore these structures):
+- Parallel steps or branching within a job (NOT ALLOWED)
+- Multi-day schedules or rolling horizons (NOT ALLOWED)
+- Quantities, batch sizes, material flow (NOT ALLOWED)
+- Costs, labor, resource pools (NOT ALLOWED)
+- Setup times or machine reconfiguration (NOT ALLOWED)
+- Machine parallelism or duplicate instances (NOT ALLOWED)
+- Non-integer durations (round to integers per rules above)
+- Job dependencies beyond sequential steps (NOT ALLOWED)
+- External constraints beyond machines (NOT ALLOWED)
+
+If the text contains forbidden constructs, IGNORE them completely and do NOT include them
+in the output. Model only what fits the allowed schema.
+
+# Worked Example
+
+Input factory description:
+"We have 3 machines: Assembly (handles 1h work), Drill/Mill is our bottleneck (2-4h work), and Packing (1-3h work).
+Three jobs: Widget A goes Assembly(1h) → Drill(3h) → Pack(1h), due by noon.
+Gadget B goes Assembly(1h) → Drill(2h) → Pack(1h), due at 2pm.
+Part C goes Drill(1h) → Pack(2h), due end of day."
+
+Output JSON:
+{
+  "machines": [
+    {"id": "M1", "name": "Assembly"},
+    {"id": "M2", "name": "Drill/Mill"},
+    {"id": "M3", "name": "Packing"}
+  ],
+  "jobs": [
+    {
+      "id": "J1",
+      "name": "Widget A",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 1},
+        {"machine_id": "M2", "duration_hours": 3},
+        {"machine_id": "M3", "duration_hours": 1}
+      ],
+      "due_time_hour": 12
+    },
+    {
+      "id": "J2",
+      "name": "Gadget B",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 1},
+        {"machine_id": "M2", "duration_hours": 2},
+        {"machine_id": "M3", "duration_hours": 1}
+      ],
+      "due_time_hour": 14
+    },
+    {
+      "id": "J3",
+      "name": "Part C",
+      "steps": [
+        {"machine_id": "M2", "duration_hours": 1},
+        {"machine_id": "M3", "duration_hours": 2}
+      ],
+      "due_time_hour": 24
+    }
+  ]
+}
+
+# User Factory Description
+
+{factory_text}
+
+# Output Instruction
+
+Respond with ONLY the JSON object matching the schema above. No prose, no comments, no markdown, no extra keys.
+"""
+        return prompt
 
 
 def normalize_scenario_spec(spec: ScenarioSpec, factory: FactoryConfig) -> ScenarioSpec:

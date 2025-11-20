@@ -9,9 +9,195 @@ All network calls are mocked; no real OpenAI API key is required.
 import pytest
 from unittest.mock import patch, MagicMock
 
-from backend.models import ScenarioSpec, ScenarioType, ScenarioMetrics
-from backend.agents import IntentAgent, FuturesAgent, BriefingAgent, FuturesResponse, BriefingResponse, normalize_scenario_spec
+from backend.models import ScenarioSpec, ScenarioType, ScenarioMetrics, FactoryConfig, Machine, Job, Step
+from backend.agents import (
+    IntentAgent,
+    FuturesAgent,
+    BriefingAgent,
+    OnboardingAgent,
+    FuturesResponse,
+    BriefingResponse,
+    normalize_scenario_spec,
+)
 from backend.world import build_toy_factory
+
+
+class TestOnboardingAgentWithMockedLLM:
+    """Test OnboardingAgent with mocked call_llm_json."""
+
+    @pytest.fixture
+    def sample_factory_config(self):
+        """Return a sample FactoryConfig for testing."""
+        return FactoryConfig(
+            machines=[
+                Machine(id="M1", name="Assembly"),
+                Machine(id="M2", name="Drill"),
+                Machine(id="M3", name="Pack"),
+            ],
+            jobs=[
+                Job(
+                    id="J1",
+                    name="Widget A",
+                    steps=[
+                        Step(machine_id="M1", duration_hours=1),
+                        Step(machine_id="M2", duration_hours=3),
+                        Step(machine_id="M3", duration_hours=1),
+                    ],
+                    due_time_hour=12,
+                ),
+                Job(
+                    id="J2",
+                    name="Gadget B",
+                    steps=[
+                        Step(machine_id="M1", duration_hours=1),
+                        Step(machine_id="M2", duration_hours=2),
+                        Step(machine_id="M3", duration_hours=1),
+                    ],
+                    due_time_hour=14,
+                ),
+            ],
+        )
+
+    def test_onboarding_agent_returns_factory_from_llm(self, sample_factory_config):
+        """Test that OnboardingAgent returns a FactoryConfig from mocked LLM."""
+        with patch("backend.agents.call_llm_json", return_value=sample_factory_config):
+            agent = OnboardingAgent()
+            result = agent.run("Some factory description text")
+
+            # Verify the result is the factory from the LLM
+            assert result == sample_factory_config
+            assert len(result.machines) == 3
+            assert len(result.jobs) == 2
+            assert result.machines[0].id == "M1"
+            assert result.jobs[0].id == "J1"
+
+    def test_onboarding_agent_calls_llm_with_prompt(self, sample_factory_config):
+        """Test that OnboardingAgent builds and passes a prompt to call_llm_json."""
+        with patch("backend.agents.call_llm_json", return_value=sample_factory_config) as mock_llm:
+            agent = OnboardingAgent()
+            agent.run("Test factory")
+
+            # Verify call_llm_json was called
+            assert mock_llm.called
+            # Verify prompt and schema were passed
+            call_args = mock_llm.call_args
+            prompt = call_args[1]["prompt"]
+            schema = call_args[1]["response_model"]
+
+            # Verify prompt contains key elements
+            assert "factory" in prompt.lower() or "machines" in prompt.lower()
+            assert "due" in prompt.lower() or "time" in prompt.lower()
+            assert schema == FactoryConfig
+
+    def test_onboarding_agent_falls_back_on_llm_error(self):
+        """Test that OnboardingAgent falls back to toy factory on LLM error."""
+        with patch("backend.agents.call_llm_json", side_effect=RuntimeError("API error")):
+            agent = OnboardingAgent()
+            result = agent.run("Some text")
+
+            # Should return toy factory
+            toy = build_toy_factory()
+            assert len(result.machines) == len(toy.machines)
+            assert len(result.jobs) == len(toy.jobs)
+            # Verify it's the toy factory by checking IDs
+            assert result.machines[0].id == toy.machines[0].id
+
+    def test_onboarding_agent_falls_back_on_validation_error(self):
+        """Test that OnboardingAgent falls back on JSON validation error."""
+        with patch("backend.agents.call_llm_json", side_effect=ValueError("Invalid JSON")):
+            agent = OnboardingAgent()
+            result = agent.run("Some text")
+
+            # Should return toy factory
+            toy = build_toy_factory()
+            assert len(result.machines) == len(toy.machines)
+            assert len(result.jobs) == len(toy.jobs)
+
+    def test_onboarding_agent_falls_back_on_timeout(self):
+        """Test that OnboardingAgent falls back on timeout/network error."""
+        with patch("backend.agents.call_llm_json", side_effect=TimeoutError("Request timeout")):
+            agent = OnboardingAgent()
+            result = agent.run("Some text")
+
+            # Should return toy factory
+            toy = build_toy_factory()
+            assert len(result.machines) == len(toy.machines)
+
+    def test_onboarding_agent_handles_empty_input(self, sample_factory_config):
+        """Test that OnboardingAgent handles empty factory description."""
+        with patch("backend.agents.call_llm_json", return_value=sample_factory_config):
+            agent = OnboardingAgent()
+            result = agent.run("")
+
+            # Should still call LLM and return its result
+            assert result == sample_factory_config
+
+    def test_onboarding_agent_with_minimal_factory(self):
+        """Test OnboardingAgent with a minimal factory (1 machine, 1 job)."""
+        minimal_factory = FactoryConfig(
+            machines=[Machine(id="M1", name="Machine")],
+            jobs=[
+                Job(
+                    id="J1",
+                    name="Job",
+                    steps=[Step(machine_id="M1", duration_hours=2)],
+                    due_time_hour=24,
+                )
+            ],
+        )
+
+        with patch("backend.agents.call_llm_json", return_value=minimal_factory):
+            agent = OnboardingAgent()
+            result = agent.run("minimal factory")
+
+            assert len(result.machines) == 1
+            assert len(result.jobs) == 1
+            assert result.jobs[0].steps[0].duration_hours == 2
+
+    def test_onboarding_agent_with_large_factory(self):
+        """Test OnboardingAgent with a larger factory."""
+        large_factory = FactoryConfig(
+            machines=[Machine(id=f"M{i}", name=f"Machine {i}") for i in range(1, 6)],
+            jobs=[
+                Job(
+                    id=f"J{i}",
+                    name=f"Job {i}",
+                    steps=[Step(machine_id=f"M{(i % 5) + 1}", duration_hours=2 + i) for i in range(3)],
+                    due_time_hour=12 + i,
+                )
+                for i in range(1, 8)
+            ],
+        )
+
+        with patch("backend.agents.call_llm_json", return_value=large_factory):
+            agent = OnboardingAgent()
+            result = agent.run("large factory")
+
+            assert len(result.machines) == 5
+            assert len(result.jobs) == 7
+            # Each job should have 3 steps
+            for job in result.jobs:
+                assert len(job.steps) == 3
+
+    def test_onboarding_agent_never_raises(self):
+        """Test that OnboardingAgent never raises, even on unexpected errors."""
+        # Test with various exception types
+        exceptions = [
+            RuntimeError("boom"),
+            ValueError("invalid"),
+            TypeError("wrong type"),
+            KeyError("missing key"),
+            Exception("generic error"),
+        ]
+
+        for exc in exceptions:
+            with patch("backend.agents.call_llm_json", side_effect=exc):
+                agent = OnboardingAgent()
+                result = agent.run("test")
+                # Should never raise; should return toy factory
+                assert isinstance(result, FactoryConfig)
+                assert len(result.machines) > 0
+                assert len(result.jobs) > 0
 
 
 class TestNormalizeScenarioSpec:

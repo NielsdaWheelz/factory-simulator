@@ -155,10 +155,12 @@ def onboard(req: OnboardingRequest) -> dict:
 
     # Step 3: Determine fallback level (structural check)
     # Fallback is needed if the normalized factory is empty (no machines or no jobs)
+    all_errors = normalization_warnings.copy()
     if not normalized_factory.machines or not normalized_factory.jobs:
         logger.debug("Fallback triggered: normalized factory is empty")
         final_factory = build_toy_factory()
         used_default_factory = True
+        all_errors.append("Normalization resulted in empty factory; using toy factory fallback")
     else:
         final_factory = normalized_factory
         # Check if the normalized factory is structurally the toy factory
@@ -167,7 +169,7 @@ def onboard(req: OnboardingRequest) -> dict:
     # Step 4: Construct OnboardingMeta
     meta = OnboardingMeta(
         used_default_factory=used_default_factory,
-        onboarding_errors=normalization_warnings,
+        onboarding_errors=all_errors,
         inferred_assumptions=[],
     )
 
