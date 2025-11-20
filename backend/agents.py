@@ -81,7 +81,7 @@ class OnboardingAgent:
             prompt = self._build_prompt(factory_text)
 
             # Call LLM
-            cfg = call_llm_json(prompt=prompt, response_model=FactoryConfig)
+            cfg = call_llm_json(prompt, FactoryConfig)
 
             # Log success
             total_steps = sum(len(job.steps) for job in cfg.jobs)

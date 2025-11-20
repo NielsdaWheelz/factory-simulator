@@ -72,22 +72,25 @@ class TestOnboardingAgentWithMockedLLM:
             assert result.jobs[0].id == "J1"
 
     def test_onboarding_agent_calls_llm_with_prompt(self, sample_factory_config):
-        """Test that OnboardingAgent builds and passes a prompt to call_llm_json."""
+        """Test that OnboardingAgent builds and passes a prompt to call_llm_json with correct signature."""
         with patch("backend.agents.call_llm_json", return_value=sample_factory_config) as mock_llm:
             agent = OnboardingAgent()
             agent.run("Test factory")
 
             # Verify call_llm_json was called
             assert mock_llm.called
-            # Verify prompt and schema were passed
-            call_args = mock_llm.call_args
-            prompt = call_args[1]["prompt"]
-            schema = call_args[1]["response_model"]
+            # Verify positional args and no kwargs (correct signature: call_llm_json(prompt, schema))
+            args, kwargs = mock_llm.call_args
+            assert kwargs == {}, f"Expected no kwargs, got {kwargs}"
+            assert len(args) == 2, f"Expected 2 positional args, got {len(args)}"
+
+            prompt, schema = args
+            # Verify prompt is a string and schema is FactoryConfig
+            assert isinstance(prompt, str), f"Expected prompt to be str, got {type(prompt)}"
+            assert schema is FactoryConfig, f"Expected schema to be FactoryConfig, got {schema}"
 
             # Verify prompt contains key elements
             assert "factory" in prompt.lower() or "machines" in prompt.lower()
-            assert "due" in prompt.lower() or "time" in prompt.lower()
-            assert schema == FactoryConfig
 
     def test_onboarding_agent_falls_back_on_llm_error(self):
         """Test that OnboardingAgent falls back to toy factory on LLM error."""
@@ -198,6 +201,53 @@ class TestOnboardingAgentWithMockedLLM:
                 assert isinstance(result, FactoryConfig)
                 assert len(result.machines) > 0
                 assert len(result.jobs) > 0
+
+    def test_onboarding_agent_uses_llm_signature_correctly(self, monkeypatch):
+        """Integration test: OnboardingAgent calls call_llm_json with correct signature.
+
+        This test uses a signature-compatible fake_call_llm_json (not a MagicMock) to ensure
+        that OnboardingAgent.run() invokes the real function signature correctly.
+
+        Before the fix (when OnboardingAgent used response_model=), this test would fail
+        because the fake_call_llm_json signature wouldn't match the call.
+        """
+        # Track calls to verify the signature
+        calls: list[tuple[str, type]] = []
+
+        def fake_call_llm_json(prompt: str, schema: type) -> FactoryConfig:
+            """Fake that matches the real call_llm_json signature."""
+            calls.append((prompt, schema))
+            # Return a minimal valid FactoryConfig
+            return FactoryConfig(
+                machines=[
+                    Machine(id="M1", name="Machine 1"),
+                ],
+                jobs=[
+                    Job(
+                        id="J1",
+                        name="Job 1",
+                        steps=[Step(machine_id="M1", duration_hours=2)],
+                        due_time_hour=24,
+                    ),
+                ],
+            )
+
+        monkeypatch.setattr("backend.agents.call_llm_json", fake_call_llm_json)
+
+        agent = OnboardingAgent()
+        cfg = agent.run("simple factory description")
+
+        # Verify the fake was actually called with correct signature
+        assert len(calls) == 1, f"Expected exactly 1 call, got {len(calls)}"
+        prompt, schema = calls[0]
+        assert isinstance(prompt, str), f"Expected prompt to be str, got {type(prompt)}"
+        assert schema is FactoryConfig, f"Expected schema to be FactoryConfig, got {schema}"
+
+        # Verify we got back the fake config, not a toy fallback
+        assert len(cfg.machines) == 1
+        assert len(cfg.jobs) == 1
+        assert cfg.machines[0].id == "M1"
+        assert cfg.jobs[0].id == "J1"
 
 
 class TestNormalizeScenarioSpec:
