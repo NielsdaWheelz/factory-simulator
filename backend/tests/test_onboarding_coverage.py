@@ -201,3 +201,94 @@ J4 takes 2h on M1, 2h on M2, 4h on M3 (total 8h)."""
         job_warn = [w for w in warnings if "jobs" in w.lower()][0]
         assert "M2" in machine_warn and "M3" in machine_warn
         assert "J2" in job_warn and "J3" in job_warn and "J4" in job_warn
+
+    def test_non_uniform_job_paths_with_4_machines(self):
+        """Test with 4 machines where jobs have non-uniform paths (some skip machines).
+
+        This is the real-world scenario where the LLM must NOT drop machines
+        just because not all jobs use them.
+        """
+        factory_text = """We run 4 machines (M1 assembly, M2 drill, M3 pack, M4 wrap).
+Jobs J1, J2, J3, J4 each pass through those machines.
+J1 takes 2h on M1, 3h on M2, 1h on M4 (total 6h).
+J2 takes 1.5h on M1, 2h on M2, 1.5h on M3 (total 5h).
+J3 takes 3h on M1, 1h on M2, 2h on M3 (total 6h).
+J4 takes 3h on M1, 2h on M2, 1h on M4 (total 6h)."""
+
+        # Correct parsing: all 4 machines, all 4 jobs
+        factory = FactoryConfig(
+            machines=[
+                Machine(id="M1", name="assembly"),
+                Machine(id="M2", name="drill"),
+                Machine(id="M3", name="pack"),
+                Machine(id="M4", name="wrap"),
+            ],
+            jobs=[
+                Job(id="J1", name="Job 1", steps=[
+                    Step(machine_id="M1", duration_hours=2),
+                    Step(machine_id="M2", duration_hours=3),
+                    Step(machine_id="M4", duration_hours=1),
+                ], due_time_hour=24),
+                Job(id="J2", name="Job 2", steps=[
+                    Step(machine_id="M1", duration_hours=2),
+                    Step(machine_id="M2", duration_hours=2),
+                    Step(machine_id="M3", duration_hours=2),
+                ], due_time_hour=24),
+                Job(id="J3", name="Job 3", steps=[
+                    Step(machine_id="M1", duration_hours=3),
+                    Step(machine_id="M2", duration_hours=1),
+                    Step(machine_id="M3", duration_hours=2),
+                ], due_time_hour=24),
+                Job(id="J4", name="Job 4", steps=[
+                    Step(machine_id="M1", duration_hours=3),
+                    Step(machine_id="M2", duration_hours=2),
+                    Step(machine_id="M4", duration_hours=1),
+                ], due_time_hour=24),
+            ],
+        )
+        warnings = estimate_onboarding_coverage(factory_text, factory)
+        # Should have NO warnings because all mentioned machines and jobs are present
+        assert len(warnings) == 0
+
+    def test_missing_m4_when_only_3_machines_parsed(self):
+        """Test the failure case: M4 is mentioned but LLM only parsed 3 machines."""
+        factory_text = """We run 4 machines (M1 assembly, M2 drill, M3 pack, M4 wrap).
+Jobs J1, J2, J3, J4 each pass through those machines.
+J1 takes 2h on M1, 3h on M2, 1h on M4 (total 6h).
+J2 takes 1.5h on M1, 2h on M2, 1.5h on M3 (total 5h).
+J3 takes 3h on M1, 1h on M2, 2h on M3 (total 6h).
+J4 takes 3h on M1, 2h on M2, 1h on M4 (total 6h)."""
+
+        # Under-extraction: LLM only parsed 3 machines
+        factory = FactoryConfig(
+            machines=[
+                Machine(id="M1", name="assembly"),
+                Machine(id="M2", name="drill"),
+                Machine(id="M3", name="pack"),
+            ],
+            jobs=[
+                Job(id="J1", name="Job 1", steps=[
+                    Step(machine_id="M1", duration_hours=2),
+                    Step(machine_id="M2", duration_hours=3),
+                ], due_time_hour=24),
+                Job(id="J2", name="Job 2", steps=[
+                    Step(machine_id="M1", duration_hours=2),
+                    Step(machine_id="M2", duration_hours=2),
+                    Step(machine_id="M3", duration_hours=2),
+                ], due_time_hour=24),
+                Job(id="J3", name="Job 3", steps=[
+                    Step(machine_id="M1", duration_hours=3),
+                    Step(machine_id="M2", duration_hours=1),
+                    Step(machine_id="M3", duration_hours=2),
+                ], due_time_hour=24),
+                Job(id="J4", name="Job 4", steps=[
+                    Step(machine_id="M1", duration_hours=3),
+                    Step(machine_id="M2", duration_hours=2),
+                ], due_time_hour=24),
+            ],
+        )
+        warnings = estimate_onboarding_coverage(factory_text, factory)
+        # Should warn that M4 is missing
+        assert len(warnings) == 1
+        assert "M4" in warnings[0]
+        assert "machines" in warnings[0].lower()

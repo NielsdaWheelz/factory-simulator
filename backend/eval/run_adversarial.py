@@ -47,6 +47,7 @@ from backend.eval.invariants import (
 )
 from backend.metrics import compute_metrics
 from backend.models import FactoryConfig, OnboardingMeta, ScenarioMetrics, ScenarioSpec
+from backend.onboarding import extract_explicit_ids, enumerate_entities, compute_coverage
 from backend.orchestrator import (
     is_toy_factory,
     run_decision_pipeline,
@@ -198,7 +199,39 @@ def build_report(
             "metrics_invariants_ok": True,
             "errors": [],
         },
+        "coverage": None,  # PR7: coverage metrics
     }
+
+    # PR7: Compute coverage metrics
+    try:
+        factory_text = case.get("factory_description", "")
+        explicit_ids = extract_explicit_ids(factory_text)
+
+        # Attempt to enumerate entities if text contains explicit IDs
+        if explicit_ids.machine_ids or explicit_ids.job_ids:
+            try:
+                entities = enumerate_entities(factory_text, explicit_ids.machine_ids, explicit_ids.job_ids)
+                coverage_report = compute_coverage(explicit_ids, entities)
+                report["coverage"] = {
+                    "detected_machine_ids": sorted(list(coverage_report.detected_machine_ids)),
+                    "detected_job_ids": sorted(list(coverage_report.detected_job_ids)),
+                    "enumerated_machine_ids": sorted(list(coverage_report.enumerated_machine_ids)),
+                    "enumerated_job_ids": sorted(list(coverage_report.enumerated_job_ids)),
+                    "missing_machines": sorted(list(coverage_report.missing_machines)),
+                    "missing_jobs": sorted(list(coverage_report.missing_jobs)),
+                    "machine_coverage": coverage_report.machine_coverage,
+                    "job_coverage": coverage_report.job_coverage,
+                }
+            except Exception as e:
+                # Enumeration failed; record the error but don't fail the report
+                report["coverage"] = {
+                    "error": f"Enumeration failed: {type(e).__name__}: {str(e)[:100]}",
+                    "detected_machine_ids": sorted(list(explicit_ids.machine_ids)),
+                    "detected_job_ids": sorted(list(explicit_ids.job_ids)),
+                }
+    except Exception as e:
+        # Even extraction failed; record it
+        report["coverage"] = {"error": f"Coverage computation failed: {str(e)[:100]}"}
 
     # Add decision phase results if applicable
     if decision_result:
@@ -291,17 +324,27 @@ def run_case(
         )
         invariants_status = "OK" if invariants_ok else "FAILED"
 
+        # PR7: Add coverage to status line
+        coverage_info = ""
+        if report.get("coverage"):
+            if "error" in report["coverage"]:
+                coverage_info = " coverage=ERROR"
+            else:
+                machine_cov = report["coverage"].get("machine_coverage", 1.0)
+                job_cov = report["coverage"].get("job_coverage", 1.0)
+                coverage_info = f" coverage=machines:{machine_cov:.0%}/jobs:{job_cov:.0%}"
+
         if not invariants_ok:
             error_count = len(report["invariants"]["errors"])
             status_line = (
                 f"[{case_id}] kind={kind} onboarding={onboarding_status} "
                 f"used_default_factory={used_default} invariants={invariants_status} "
-                f"({error_count} violations)"
+                f"({error_count} violations){coverage_info}"
             )
         else:
             status_line = (
                 f"[{case_id}] kind={kind} onboarding={onboarding_status} "
-                f"used_default_factory={used_default} invariants={invariants_status}"
+                f"used_default_factory={used_default} invariants={invariants_status}{coverage_info}"
             )
 
         return report, status_line
