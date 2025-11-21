@@ -156,6 +156,23 @@
   color: #856404;
 }
 
+.view-details-button {
+  margin-top: 12px;
+  padding: 8px 16px;
+  background-color: #3498db;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.view-details-button:hover {
+  background-color: #2980b9;
+}
+
 /* Fallback Notice (smaller, inside scenarios panel) */
 .fallback-notice {
   margin-bottom: 16px;
