@@ -513,3 +513,152 @@ class TestSimulateEndpointOnboardingIntegration:
         # Verify the response contains the onboarded factory (not toy)
         assert data["factory"]["machines"][0]["id"] == "M_ONBOARD"
         assert data["factory"]["jobs"][0]["id"] == "J_ONBOARD"
+
+
+class TestSimulateEndpointMetaPropagation:
+    """PR5 test: Verify that /api/simulate propagates OnboardingMeta correctly.
+
+    These tests ensure that:
+    - Meta from run_onboarded_pipeline is returned in the response
+    - used_default_factory flag is visible in the response
+    - Onboarding errors are propagated to the frontend
+    """
+
+    def test_simulate_endpoint_propagates_used_default_factory_flag(self, client, monkeypatch):
+        """Test that simulate endpoint propagates used_default_factory=True flag.
+
+        Scenario:
+        - run_onboarded_pipeline returns meta with used_default_factory=True
+        - Endpoint should propagate this in the response JSON
+        - Frontend can then display a fallback warning banner
+        """
+        from backend.models import OnboardingMeta
+
+        def mock_run_onboarded_pipeline(factory_text, situation_text):
+            return {
+                "factory": FactoryConfig(
+                    machines=[Machine(id="M1", name="toy assembly")],
+                    jobs=[Job(id="J1", name="toy job", steps=[Step(machine_id="M1", duration_hours=1)], due_time_hour=24)],
+                ),
+                "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+                "metrics": [ScenarioMetrics(makespan_hour=5, job_lateness={"J1": 0}, bottleneck_machine_id="M1", bottleneck_utilization=0.5)],
+                "briefing": "# Briefing",
+                "meta": OnboardingMeta(
+                    used_default_factory=True,
+                    onboarding_errors=["coverage mismatch: missing machines"],
+                    inferred_assumptions=[]
+                ),
+            }
+
+        monkeypatch.setattr(
+            "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
+        )
+
+        response = client.post(
+            "/api/simulate",
+            json={
+                "factory_description": "unparseable text",
+                "situation_text": "normal day",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify meta is in response
+        assert "meta" in data
+        assert data["meta"]["used_default_factory"] is True
+
+    def test_simulate_endpoint_propagates_onboarding_errors(self, client, monkeypatch):
+        """Test that simulate endpoint propagates onboarding_errors list.
+
+        Scenario:
+        - run_onboarded_pipeline returns meta with onboarding_errors list
+        - These errors should be visible in the response
+        - Frontend can display them as warnings
+        """
+        from backend.models import OnboardingMeta
+
+        def mock_run_onboarded_pipeline(factory_text, situation_text):
+            return {
+                "factory": FactoryConfig(
+                    machines=[Machine(id="M1", name="toy")],
+                    jobs=[Job(id="J1", name="toy", steps=[Step(machine_id="M1", duration_hours=1)], due_time_hour=24)],
+                ),
+                "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+                "metrics": [ScenarioMetrics(makespan_hour=5, job_lateness={"J1": 0}, bottleneck_machine_id="M1", bottleneck_utilization=0.5)],
+                "briefing": "# Briefing",
+                "meta": OnboardingMeta(
+                    used_default_factory=True,
+                    onboarding_errors=["LLM timeout during coarse extraction", "Fell back to toy factory"],
+                    inferred_assumptions=[]
+                ),
+            }
+
+        monkeypatch.setattr(
+            "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
+        )
+
+        response = client.post(
+            "/api/simulate",
+            json={
+                "factory_description": "factory text",
+                "situation_text": "situation",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify onboarding_errors are propagated
+        assert "meta" in data
+        assert "onboarding_errors" in data["meta"]
+        assert isinstance(data["meta"]["onboarding_errors"], list)
+        assert len(data["meta"]["onboarding_errors"]) == 2
+        assert "LLM timeout" in data["meta"]["onboarding_errors"][0]
+        assert "toy factory" in data["meta"]["onboarding_errors"][1]
+
+    def test_simulate_endpoint_meta_on_success(self, client, monkeypatch):
+        """Test that simulate endpoint returns meta with used_default_factory=False on success.
+
+        Scenario:
+        - run_onboarded_pipeline succeeds and returns onboarding with no fallback
+        - Meta should show used_default_factory=False
+        - onboarding_errors should be empty
+        """
+        from backend.models import OnboardingMeta
+
+        def mock_run_onboarded_pipeline(factory_text, situation_text):
+            return {
+                "factory": FactoryConfig(
+                    machines=[Machine(id="M_CUSTOM", name="custom assembly")],
+                    jobs=[Job(id="J_CUSTOM", name="custom job", steps=[Step(machine_id="M_CUSTOM", duration_hours=2)], due_time_hour=12)],
+                ),
+                "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+                "metrics": [ScenarioMetrics(makespan_hour=5, job_lateness={"J_CUSTOM": 0}, bottleneck_machine_id="M_CUSTOM", bottleneck_utilization=0.8)],
+                "briefing": "# Briefing",
+                "meta": OnboardingMeta(
+                    used_default_factory=False,
+                    onboarding_errors=[],
+                    inferred_assumptions=[]
+                ),
+            }
+
+        monkeypatch.setattr(
+            "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
+        )
+
+        response = client.post(
+            "/api/simulate",
+            json={
+                "factory_description": "clean factory description",
+                "situation_text": "normal day",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify meta shows success
+        assert data["meta"]["used_default_factory"] is False
+        assert data["meta"]["onboarding_errors"] == []

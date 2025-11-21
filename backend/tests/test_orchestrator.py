@@ -522,6 +522,160 @@ class TestRunOnboarding:
             assert isinstance(meta, OnboardingMeta)
 
 
+class TestRunOnboardingNegativeIntegration:
+    """PR5 negative integration tests for run_onboarding fallback behavior.
+
+    Verify that:
+    - run_onboarding NEVER returns degraded configs when coverage < 100% or invariants fail
+    - Fallback to toy factory is reliable and always properly signaled in meta
+    - Error messages in onboarding_errors are user-facing and informative
+    """
+
+    def test_run_onboarding_falls_back_on_coverage_mismatch_extraction_error(self):
+        """Test that run_onboarding falls back to toy factory on COVERAGE_MISMATCH error.
+
+        Scenario:
+        - OnboardingAgent.run raises ExtractionError with code='COVERAGE_MISMATCH'
+        - run_onboarding should catch it and return toy factory with error metadata
+        - No exception should propagate to caller
+        """
+        from backend.onboarding import ExtractionError
+
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent:
+
+            mock_agent.side_effect = ExtractionError(
+                code="COVERAGE_MISMATCH",
+                message="coverage mismatch: missing machines ['M3'], missing jobs ['J3']",
+                details={
+                    "missing_machines": ["M3"],
+                    "missing_jobs": ["J3"],
+                    "machine_coverage": 0.67,
+                    "job_coverage": 0.67,
+                },
+            )
+
+            factory, meta = run_onboarding("factory with M1, M2, M3 and J1, J2, J3 but LLM only found M1, M2")
+
+            # Verify fallback occurred
+            toy_factory = build_toy_factory()
+            assert factory == toy_factory
+            assert meta.used_default_factory is True
+
+            # Verify error is documented in meta
+            assert len(meta.onboarding_errors) > 0
+            error_msg = meta.onboarding_errors[0]
+            assert "COVERAGE_MISMATCH" in error_msg or "coverage" in error_msg.lower()
+
+    def test_run_onboarding_falls_back_on_normalization_failure(self):
+        """Test that run_onboarding falls back on NORMALIZATION_FAILED error.
+
+        Scenario:
+        - OnboardingAgent.run raises ExtractionError with code='NORMALIZATION_FAILED'
+        - run_onboarding should catch it and return toy factory
+        - Meta should indicate fallback with error details
+        """
+        from backend.onboarding import ExtractionError
+
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent:
+
+            mock_agent.side_effect = ExtractionError(
+                code="NORMALIZATION_FAILED",
+                message="Jobs were lost during normalization: ['J1']",
+                details={"lost_job_ids": ["J1"]},
+            )
+
+            factory, meta = run_onboarding("factory description")
+
+            # Verify fallback
+            toy_factory = build_toy_factory()
+            assert factory == toy_factory
+            assert meta.used_default_factory is True
+            assert len(meta.onboarding_errors) > 0
+            assert "NORMALIZATION_FAILED" in meta.onboarding_errors[0] or "lost" in meta.onboarding_errors[0].lower()
+
+    def test_run_onboarding_falls_back_on_llm_failure(self):
+        """Test that run_onboarding falls back on LLM_FAILURE error.
+
+        Scenario:
+        - OnboardingAgent.run raises ExtractionError with code='LLM_FAILURE'
+        - run_onboarding should catch it and return toy factory
+        - Error message should mention the LLM failure
+        """
+        from backend.onboarding import ExtractionError
+
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent:
+
+            mock_agent.side_effect = ExtractionError(
+                code="LLM_FAILURE",
+                message="API timeout after 30s",
+                details={"stage": "coarse_extraction", "error_type": "TimeoutError"},
+            )
+
+            factory, meta = run_onboarding("factory text")
+
+            toy_factory = build_toy_factory()
+            assert factory == toy_factory
+            assert meta.used_default_factory is True
+            assert "LLM_FAILURE" in meta.onboarding_errors[0] or "timeout" in meta.onboarding_errors[0].lower()
+
+    def test_run_onboarding_success_passthrough(self):
+        """Test that run_onboarding returns agent output when successful.
+
+        Scenario:
+        - OnboardingAgent.run succeeds and returns a valid (non-toy) FactoryConfig
+        - run_onboarding should return it directly with no fallback flag
+        - Meta should show no errors
+        """
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent:
+
+            custom_factory = FactoryConfig(
+                machines=[
+                    Machine(id="M1", name="assembly"),
+                    Machine(id="M2", name="drill"),
+                ],
+                jobs=[
+                    Job(id="J1", name="widget", steps=[Step(machine_id="M1", duration_hours=2)], due_time_hour=12),
+                    Job(id="J2", name="gadget", steps=[Step(machine_id="M2", duration_hours=3)], due_time_hour=10),
+                ]
+            )
+            mock_agent.return_value = custom_factory
+
+            factory, meta = run_onboarding("custom factory description")
+
+            # Verify passthrough
+            assert factory == custom_factory
+            assert meta.used_default_factory is False
+            assert meta.onboarding_errors == []
+
+    def test_run_onboarding_meta_has_required_fields(self):
+        """Test that returned OnboardingMeta always has required fields.
+
+        Scenario:
+        - Whether success or fallback, meta should have:
+          - used_default_factory (bool)
+          - onboarding_errors (list of str)
+          - inferred_assumptions (list of str, can be empty)
+        """
+        from backend.onboarding import ExtractionError
+
+        # Test with success
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent:
+            mock_agent.return_value = build_toy_factory()
+            _, meta = run_onboarding("test")
+            assert isinstance(meta.used_default_factory, bool)
+            assert isinstance(meta.onboarding_errors, list)
+            assert isinstance(meta.inferred_assumptions, list)
+
+        # Test with fallback
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent:
+            mock_agent.side_effect = ExtractionError(code="LLM_FAILURE", message="test")
+            _, meta = run_onboarding("test")
+            assert isinstance(meta.used_default_factory, bool)
+            assert isinstance(meta.onboarding_errors, list)
+            assert isinstance(meta.inferred_assumptions, list)
+            assert meta.used_default_factory is True
+
+
 class TestRunDecisionPipeline:
     """Test run_decision_pipeline function - intent, futures, simulation, briefing."""
 

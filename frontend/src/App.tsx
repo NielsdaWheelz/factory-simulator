@@ -96,6 +96,29 @@ function App() {
             {/* Factory Panel */}
             <section className="panel factory-panel">
               <h2>Inferred Factory</h2>
+
+              {/* Fallback Warning Banner */}
+              {result.meta?.used_default_factory && (
+                <div className="fallback-banner">
+                  <div className="banner-header">
+                    <strong>⚠️ Using Demo Factory</strong>
+                  </div>
+                  <p className="banner-message">
+                    We couldn&apos;t parse your factory description. The system is using a built-in demo factory instead. Please review the factory below to ensure it matches your intent.
+                  </p>
+                  {result.meta?.onboarding_errors && result.meta.onboarding_errors.length > 0 && (
+                    <div className="errors-box">
+                      <strong>Issues encountered:</strong>
+                      <ul className="errors-list">
+                        {result.meta.onboarding_errors.map((error, idx) => (
+                          <li key={idx}>{error}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="panel-content">
                 <div className="factory-subsection">
                   <h3>Machines</h3>
@@ -131,6 +154,16 @@ function App() {
             {/* Scenarios & Metrics Panel */}
             <section className="panel scenarios-panel">
               <h2>Scenarios & Metrics</h2>
+
+              {/* Fallback Notice for Simulate */}
+              {result.meta?.used_default_factory && (
+                <div className="fallback-notice">
+                  <p>
+                    <strong>Note:</strong> The scenarios and metrics below are based on the demo factory, not your original input.
+                  </p>
+                </div>
+              )}
+
               <div className="panel-content">
                 <table className="metrics-table">
                   <thead>
