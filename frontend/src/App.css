@@ -113,6 +113,65 @@
   font-weight: 500;
 }
 
+/* Fallback Warning Banner (inside factory panel) */
+.fallback-banner {
+  margin-bottom: 20px;
+  padding: 16px;
+  background-color: #fff3cd;
+  border: 2px solid #ffc107;
+  border-radius: 6px;
+  color: #856404;
+}
+
+.banner-header {
+  font-size: 15px;
+  margin-bottom: 10px;
+  color: #856404;
+}
+
+.banner-message {
+  margin: 10px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #856404;
+}
+
+.errors-box {
+  margin-top: 12px;
+  padding: 10px;
+  background-color: rgba(255, 193, 7, 0.15);
+  border-left: 3px solid #ffc107;
+  border-radius: 3px;
+}
+
+.errors-list {
+  margin: 8px 0 0 20px;
+  padding: 0;
+  list-style: disc;
+}
+
+.errors-list li {
+  margin: 4px 0;
+  font-size: 12px;
+  color: #856404;
+}
+
+/* Fallback Notice (smaller, inside scenarios panel) */
+.fallback-notice {
+  margin-bottom: 16px;
+  padding: 12px;
+  background-color: #e7f3ff;
+  border: 1px solid #b3d9ff;
+  border-radius: 4px;
+  color: #004085;
+}
+
+.fallback-notice p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 /* Output Panels */
 .output-panels {
   display: grid;

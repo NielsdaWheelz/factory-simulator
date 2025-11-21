@@ -227,33 +227,48 @@ class TestOnboardingAgentIntegration:
 class TestNormalizeFactoryIntegration:
     """Test integration with normalize_factory."""
 
-    def test_onboarded_pipeline_uses_normalize_factory(self):
-        """Verify normalize_factory is called on OnboardingAgent output."""
-        with patch("backend.orchestrator.normalize_factory") as mock_normalize, \
+    def test_onboarded_pipeline_with_valid_agent_output(self):
+        """Verify run_onboarded_pipeline works with valid OnboardingAgent output."""
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_onboarding, \
              patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
-            toy_factory = build_toy_factory()
-            mock_normalize.return_value = (toy_factory, [])  # Return tuple with warnings
+            valid_factory = FactoryConfig(
+                machines=[Machine(id="M1", name="M1")],
+                jobs=[Job(id="J1", name="J1", steps=[Step(machine_id="M1", duration_hours=1)], due_time_hour=24)]
+            )
+            mock_onboarding.return_value = valid_factory
             mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
             mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
 
-            run_onboarded_pipeline(
+            output = run_onboarded_pipeline(
                 factory_text="test",
                 situation_text="test"
             )
 
-            # Verify normalize_factory was called
-            assert mock_normalize.called
+            # Verify agent was called and output is valid
+            assert mock_onboarding.called
+            assert "meta" in output
+            assert output["meta"].used_default_factory is False
+            assert len(output["meta"].onboarding_errors) == 0
 
-    def test_onboarded_pipeline_with_invalid_factory_text_fallback(self):
-        """Verify pipeline handles factories that normalize to toy factory."""
-        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+    def test_onboarded_pipeline_with_agent_error_fallback(self):
+        """Verify pipeline fallsback when agent raises ExtractionError."""
+        from backend.onboarding import ExtractionError
+
+        with patch("backend.agents.OnboardingAgent.run") as mock_onboarding, \
+             patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
+            # Agent raises error - causes fallback to toy factory
+            mock_onboarding.side_effect = ExtractionError(
+                code="COVERAGE_MISMATCH",
+                message="missing machines",
+                details={},
+            )
             mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
             mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
@@ -263,7 +278,7 @@ class TestNormalizeFactoryIntegration:
                 situation_text="test"
             )
 
-            # In PR1, OnboardingAgent stub always returns toy_factory
+            # When OnboardingAgent returns an empty factory, it normalizes to toy_factory
             # So used_default_factory should be True
             assert output["meta"].used_default_factory is True
 
@@ -272,11 +287,20 @@ class TestMetadataTracking:
     """Test metadata tracking in output."""
 
     def test_onboarded_pipeline_used_default_factory_flag(self):
-        """Verify used_default_factory flag is set correctly."""
-        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+        """Verify used_default_factory flag is set when onboarding fails."""
+        from backend.onboarding import ExtractionError
+
+        with patch("backend.agents.OnboardingAgent.run") as mock_onboarding, \
+             patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
+            # Agent raises error → run_onboarding falls back to toy factory
+            mock_onboarding.side_effect = ExtractionError(
+                code="LLM_FAILURE",
+                message="LLM error",
+                details={},
+            )
             mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
             mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
@@ -286,15 +310,31 @@ class TestMetadataTracking:
                 situation_text="test"
             )
 
-            # In PR1, this should always be True (stub returns toy factory)
+            # When OnboardingAgent returns toy factory, used_default_factory is True
             assert isinstance(output["meta"].used_default_factory, bool)
+            assert output["meta"].used_default_factory is True
 
     def test_onboarded_pipeline_onboarding_errors_empty_in_pr1(self):
-        """Verify onboarding_errors is empty in PR1 (no LLM yet)."""
-        with patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+        """Verify onboarding_errors is empty when OnboardingAgent succeeds."""
+        # Mock OnboardingAgent to return a valid factory (success case)
+        valid_factory = FactoryConfig(
+            machines=[Machine(id="M1", name="Machine 1")],
+            jobs=[
+                Job(
+                    id="J1",
+                    name="Job 1",
+                    steps=[Step(machine_id="M1", duration_hours=2)],
+                    due_time_hour=24,
+                )
+            ]
+        )
+
+        with patch("backend.agents.OnboardingAgent.run") as mock_onboarding, \
+             patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
              patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
              patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
 
+            mock_onboarding.return_value = valid_factory
             mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
             mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
             mock_briefing.return_value = "# Test"
@@ -304,7 +344,7 @@ class TestMetadataTracking:
                 situation_text="test"
             )
 
-            # In PR1, onboarding_errors should always be empty
+            # When OnboardingAgent succeeds with valid factory, onboarding_errors should be empty
             assert output["meta"].onboarding_errors == []
 
 
@@ -526,3 +566,237 @@ class TestIntegrationWithSimulation:
             assert metrics.makespan_hour > 0
             assert metrics.bottleneck_utilization > 0
             assert len(metrics.job_lateness) > 0
+
+
+class TestOnboardingCoverageWarnings:
+    """Test that coverage warnings are properly integrated into run_onboarding."""
+
+    def test_coverage_mismatch_causes_fallback(self):
+        """When OnboardingAgent detects coverage mismatch, fallback is triggered."""
+        from backend.onboarding import ExtractionError
+
+        # Create a factory text mentioning 4 jobs
+        factory_text = "We have jobs J1, J2, J3, J4 to process through machines M1, M2."
+
+        with patch("backend.orchestrator.OnboardingAgent") as MockAgent, \
+             patch("backend.orchestrator.IntentAgent.run") as mock_intent, \
+             patch("backend.orchestrator.FuturesAgent.run") as mock_futures, \
+             patch("backend.orchestrator.BriefingAgent.run") as mock_briefing:
+
+            # Agent detects coverage mismatch (J2, J3, J4, M2 not in factory)
+            mock_agent_instance = MagicMock()
+            mock_agent_instance.run.side_effect = ExtractionError(
+                code="COVERAGE_MISMATCH",
+                message="coverage mismatch: missing machines ['M2'], missing jobs ['J2', 'J3', 'J4']",
+                details={
+                    "missing_machines": ["M2"],
+                    "missing_jobs": ["J2", "J3", "J4"],
+                    "machine_coverage": 0.5,
+                    "job_coverage": 0.25,
+                },
+            )
+            MockAgent.return_value = mock_agent_instance
+
+            # Mock other agents to avoid failures
+            mock_intent.return_value = (ScenarioSpec(scenario_type=ScenarioType.BASELINE), "test context")
+            mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "test justification")
+            mock_briefing.return_value = "# Test Briefing"
+
+            # Run the pipeline
+            from backend.orchestrator import run_onboarding
+            factory, meta = run_onboarding(factory_text)
+
+            # Verify that fallback was triggered
+            assert meta.used_default_factory is True
+            # Should have error about coverage mismatch
+            error_text = " ".join(meta.onboarding_errors)
+            assert "COVERAGE_MISMATCH" in error_text
+
+            # Verify toy factory was returned
+            assert len(factory.machines) == 3  # Toy factory has 3 machines
+            assert len(factory.jobs) == 3  # Toy factory has 3 jobs
+
+    def test_no_coverage_warnings_for_complete_extraction(self):
+        """When all mentioned jobs/machines are extracted, no coverage warnings."""
+        factory_text = "We have jobs J1, J2, J3 and machines M1, M2."
+
+        # Complete factory matching all mentions
+        complete_factory = FactoryConfig(
+            machines=[
+                Machine(id="M1", name="Machine 1"),
+                Machine(id="M2", name="Machine 2"),
+            ],
+            jobs=[
+                Job(id="J1", name="Job 1", steps=[Step(machine_id="M1", duration_hours=1)], due_time_hour=24),
+                Job(id="J2", name="Job 2", steps=[Step(machine_id="M2", duration_hours=1)], due_time_hour=24),
+                Job(id="J3", name="Job 3", steps=[Step(machine_id="M1", duration_hours=1)], due_time_hour=24),
+            ],
+        )
+
+        with patch("backend.orchestrator.OnboardingAgent") as MockAgent:
+            mock_agent_instance = MagicMock()
+            mock_agent_instance.run.return_value = complete_factory
+            MockAgent.return_value = mock_agent_instance
+
+            from backend.orchestrator import run_onboarding
+            factory, meta = run_onboarding(factory_text)
+
+            # Should have no coverage warnings (only normalization warnings if any)
+            coverage_warnings = [e for e in meta.onboarding_errors if "coverage warning" in e.lower()]
+            assert len(coverage_warnings) == 0
+
+            # Factory should be unchanged
+            assert len(factory.machines) == 2
+            assert len(factory.jobs) == 3
+
+
+class TestRunOnboardingWithNewAgent:
+    """Test run_onboarding with new multi-stage OnboardingAgent that enforces coverage."""
+
+    def test_run_onboarding_agent_success_passes_through_factory(self):
+        """When OnboardingAgent.run succeeds, run_onboarding returns that factory."""
+        factory_text = "We have M1, M2. J1 on M1, J2 on M2."
+        expected_factory = FactoryConfig(
+            machines=[
+                Machine(id="M1", name="M1"),
+                Machine(id="M2", name="M2"),
+            ],
+            jobs=[
+                Job(id="J1", name="J1", steps=[Step(machine_id="M1", duration_hours=1)], due_time_hour=24),
+                Job(id="J2", name="J2", steps=[Step(machine_id="M2", duration_hours=1)], due_time_hour=24),
+            ],
+        )
+
+        with patch("backend.orchestrator.OnboardingAgent") as MockAgent:
+            mock_agent_instance = MagicMock()
+            mock_agent_instance.run.return_value = expected_factory
+            MockAgent.return_value = mock_agent_instance
+
+            from backend.orchestrator import run_onboarding
+
+            factory, meta = run_onboarding(factory_text)
+
+            # Verify factory is the one from agent
+            assert factory == expected_factory
+            assert len(factory.machines) == 2
+            assert len(factory.jobs) == 2
+
+            # Verify meta indicates success
+            assert meta.used_default_factory is False
+            assert len(meta.onboarding_errors) == 0
+
+            # Verify agent.run was called with factory_text
+            mock_agent_instance.run.assert_called_once_with(factory_text)
+
+    def test_run_onboarding_extraction_error_coverage_mismatch_falls_back(self):
+        """When OnboardingAgent raises COVERAGE_MISMATCH, run_onboarding falls back to toy factory."""
+        from backend.onboarding import ExtractionError
+
+        factory_text = "We have M1, M2, M3. J1 only uses M1."
+
+        with patch("backend.orchestrator.OnboardingAgent") as MockAgent:
+            mock_agent_instance = MagicMock()
+            # Agent raises coverage mismatch: M2, M3 are mentioned but not in parsed factory
+            error = ExtractionError(
+                code="COVERAGE_MISMATCH",
+                message="coverage mismatch: missing machines ['M2', 'M3'], missing jobs []",
+                details={
+                    "missing_machines": ["M2", "M3"],
+                    "missing_jobs": [],
+                    "machine_coverage": 0.33,
+                    "job_coverage": 1.0,
+                },
+            )
+            mock_agent_instance.run.side_effect = error
+            MockAgent.return_value = mock_agent_instance
+
+            from backend.orchestrator import run_onboarding
+
+            factory, meta = run_onboarding(factory_text)
+
+            # Should fallback to toy factory
+            assert meta.used_default_factory is True
+            toy_factory = build_toy_factory()
+            assert len(factory.machines) == len(toy_factory.machines)
+            assert len(factory.jobs) == len(toy_factory.jobs)
+
+            # Should have error in meta
+            assert len(meta.onboarding_errors) > 0
+            assert "COVERAGE_MISMATCH" in meta.onboarding_errors[0]
+            assert "M2" in meta.onboarding_errors[0] or "missing machines" in meta.onboarding_errors[0]
+
+    def test_run_onboarding_extraction_error_llm_failure_falls_back(self):
+        """When OnboardingAgent raises LLM_FAILURE, run_onboarding falls back to toy factory."""
+        from backend.onboarding import ExtractionError
+
+        factory_text = "We have M1. J1."
+
+        with patch("backend.orchestrator.OnboardingAgent") as MockAgent:
+            mock_agent_instance = MagicMock()
+            error = ExtractionError(
+                code="LLM_FAILURE",
+                message="API timeout",
+                details={"stage": "coarse_extraction", "error_type": "RuntimeError"},
+            )
+            mock_agent_instance.run.side_effect = error
+            MockAgent.return_value = mock_agent_instance
+
+            from backend.orchestrator import run_onboarding
+
+            factory, meta = run_onboarding(factory_text)
+
+            # Should fallback to toy factory
+            assert meta.used_default_factory is True
+            toy_factory = build_toy_factory()
+            assert len(factory.machines) == len(toy_factory.machines)
+
+            # Should have error in meta
+            assert len(meta.onboarding_errors) > 0
+            assert "LLM_FAILURE" in meta.onboarding_errors[0]
+
+    def test_run_onboarding_never_raises_exception(self):
+        """run_onboarding should never raise an exception; always return with fallback."""
+        from backend.onboarding import ExtractionError
+
+        with patch("backend.orchestrator.OnboardingAgent") as MockAgent:
+            mock_agent_instance = MagicMock()
+            # Any ExtractionError should be caught and handled
+            error = ExtractionError(
+                code="INVALID_STRUCTURE",
+                message="Invalid normalization result",
+                details={},
+            )
+            mock_agent_instance.run.side_effect = error
+            MockAgent.return_value = mock_agent_instance
+
+            from backend.orchestrator import run_onboarding
+
+            # Should not raise
+            factory, meta = run_onboarding("any text")
+
+            # Should fallback gracefully
+            assert meta.used_default_factory is True
+            assert len(meta.onboarding_errors) > 0
+
+    def test_run_onboarding_with_empty_text(self):
+        """run_onboarding should handle empty factory_text."""
+        from backend.onboarding import ExtractionError
+
+        with patch("backend.orchestrator.OnboardingAgent") as MockAgent:
+            mock_agent_instance = MagicMock()
+            toy_factory = build_toy_factory()
+            # Empty text might cause no IDs detected → coverage mismatch
+            error = ExtractionError(
+                code="COVERAGE_MISMATCH",
+                message="no IDs detected in text",
+                details={"missing_machines": [], "missing_jobs": []},
+            )
+            mock_agent_instance.run.side_effect = error
+            MockAgent.return_value = mock_agent_instance
+
+            from backend.orchestrator import run_onboarding
+
+            factory, meta = run_onboarding("")
+
+            # Should handle gracefully and fallback
+            assert meta.used_default_factory is True

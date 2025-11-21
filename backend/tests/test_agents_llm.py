@@ -23,7 +23,17 @@ from backend.world import build_toy_factory
 
 
 class TestOnboardingAgentWithMockedLLM:
-    """Test OnboardingAgent with mocked call_llm_json."""
+    """Test OnboardingAgent with mocked multi-stage pipeline (PR4).
+
+    PR4 refactored OnboardingAgent to orchestrate multiple stages:
+    - Stage 0: extract_explicit_ids (deterministic)
+    - Stage 1: extract_coarse_structure (LLM)
+    - Stage 2: extract_steps (LLM)
+    - Stage 3: validate_and_normalize (deterministic)
+    - Stage 4: assess_coverage (deterministic)
+
+    These tests mock the helper functions, not call_llm_json directly.
+    """
 
     @pytest.fixture
     def sample_factory_config(self):
@@ -58,82 +68,135 @@ class TestOnboardingAgentWithMockedLLM:
             ],
         )
 
-    def test_onboarding_agent_returns_factory_from_llm(self, sample_factory_config):
-        """Test that OnboardingAgent returns a FactoryConfig from mocked LLM."""
-        with patch("backend.agents.call_llm_json", return_value=sample_factory_config):
+    def test_onboarding_agent_returns_factory_from_pipeline(self, sample_factory_config):
+        """Test that OnboardingAgent orchestrates stages and returns valid FactoryConfig."""
+        from backend.onboarding import (
+            ExplicitIds, CoarseStructure, CoarseMachine, CoarseJob,
+            RawFactoryConfig, RawJob, RawStep, CoverageReport,
+        )
+
+        # Setup mocks for all stages
+        ids = ExplicitIds(machine_ids={"M1", "M2", "M3"}, job_ids={"J1", "J2"})
+        coarse = CoarseStructure(
+            machines=[CoarseMachine(id="M1", name="Assembly"), CoarseMachine(id="M2", name="Drill"), CoarseMachine(id="M3", name="Pack")],
+            jobs=[CoarseJob(id="J1", name="Widget A"), CoarseJob(id="J2", name="Gadget B")],
+        )
+        raw = RawFactoryConfig(
+            machines=[CoarseMachine(id="M1", name="Assembly"), CoarseMachine(id="M2", name="Drill"), CoarseMachine(id="M3", name="Pack")],
+            jobs=[
+                RawJob(id="J1", name="Widget A", steps=[RawStep(machine_id="M1", duration_hours=1), RawStep(machine_id="M2", duration_hours=3), RawStep(machine_id="M3", duration_hours=1)], due_time_hour=12),
+                RawJob(id="J2", name="Gadget B", steps=[RawStep(machine_id="M1", duration_hours=1), RawStep(machine_id="M2", duration_hours=2), RawStep(machine_id="M3", duration_hours=1)], due_time_hour=14),
+            ],
+        )
+        coverage = CoverageReport(
+            detected_machines={"M1", "M2", "M3"},
+            detected_jobs={"J1", "J2"},
+            parsed_machines={"M1", "M2", "M3"},
+            parsed_jobs={"J1", "J2"},
+            missing_machines=set(),
+            missing_jobs=set(),
+            machine_coverage=1.0,
+            job_coverage=1.0,
+        )
+
+        with patch("backend.agents.extract_explicit_ids", return_value=ids), \
+             patch("backend.agents.extract_coarse_structure", return_value=coarse), \
+             patch("backend.agents.extract_steps", return_value=raw), \
+             patch("backend.agents.validate_and_normalize", return_value=sample_factory_config), \
+             patch("backend.agents.assess_coverage", return_value=coverage):
+
             agent = OnboardingAgent()
             result = agent.run("Some factory description text")
 
-            # Verify the result is the factory from the LLM
+            # Verify the result is the factory from the pipeline
             assert result == sample_factory_config
             assert len(result.machines) == 3
             assert len(result.jobs) == 2
             assert result.machines[0].id == "M1"
             assert result.jobs[0].id == "J1"
 
-    def test_onboarding_agent_calls_llm_with_prompt(self, sample_factory_config):
-        """Test that OnboardingAgent builds and passes a prompt to call_llm_json."""
-        with patch("backend.agents.call_llm_json", return_value=sample_factory_config) as mock_llm:
+    def test_onboarding_agent_raises_on_llm_error(self):
+        """Test that OnboardingAgent raises ExtractionError on LLM failure."""
+        from backend.onboarding import ExtractionError
+
+        with patch("backend.agents.extract_explicit_ids") as mock_stage0, \
+             patch("backend.agents.extract_coarse_structure", side_effect=RuntimeError("API error")):
+
+            mock_stage0.return_value = MagicMock(machine_ids={"M1"}, job_ids={"J1"})
             agent = OnboardingAgent()
-            agent.run("Test factory")
 
-            # Verify call_llm_json was called
-            assert mock_llm.called
-            # Verify prompt and schema were passed
-            call_args = mock_llm.call_args
-            prompt = call_args[1]["prompt"]
-            schema = call_args[1]["response_model"]
+            with pytest.raises(ExtractionError) as exc_info:
+                agent.run("Some text")
 
-            # Verify prompt contains key elements
-            assert "factory" in prompt.lower() or "machines" in prompt.lower()
-            assert "due" in prompt.lower() or "time" in prompt.lower()
-            assert schema == FactoryConfig
+            # Should wrap the error with LLM_FAILURE
+            assert exc_info.value.code == "LLM_FAILURE"
+            assert "API error" in exc_info.value.message
 
-    def test_onboarding_agent_falls_back_on_llm_error(self):
-        """Test that OnboardingAgent falls back to toy factory on LLM error."""
-        with patch("backend.agents.call_llm_json", side_effect=RuntimeError("API error")):
+    def test_onboarding_agent_raises_on_validation_error(self):
+        """Test that OnboardingAgent raises ExtractionError on validation error."""
+        from backend.onboarding import ExtractionError
+
+        with patch("backend.agents.extract_explicit_ids") as mock_stage0, \
+             patch("backend.agents.extract_coarse_structure") as mock_stage1, \
+             patch("backend.agents.extract_steps") as mock_stage2, \
+             patch("backend.agents.validate_and_normalize", side_effect=ValueError("Invalid structure")):
+
+            mock_stage0.return_value = MagicMock(machine_ids={"M1"}, job_ids={"J1"})
+            mock_stage1.return_value = MagicMock(machines=[MagicMock(id="M1")], jobs=[MagicMock(id="J1")])
+            mock_stage2.return_value = MagicMock(machines=[MagicMock(id="M1")], jobs=[MagicMock(id="J1", steps=[MagicMock(machine_id="M1", duration_hours=1)])])
+
             agent = OnboardingAgent()
-            result = agent.run("Some text")
 
-            # Should return toy factory
-            toy = build_toy_factory()
-            assert len(result.machines) == len(toy.machines)
-            assert len(result.jobs) == len(toy.jobs)
-            # Verify it's the toy factory by checking IDs
-            assert result.machines[0].id == toy.machines[0].id
+            with pytest.raises(ExtractionError) as exc_info:
+                agent.run("Some text")
 
-    def test_onboarding_agent_falls_back_on_validation_error(self):
-        """Test that OnboardingAgent falls back on JSON validation error."""
-        with patch("backend.agents.call_llm_json", side_effect=ValueError("Invalid JSON")):
+            # Should wrap the error with NORMALIZATION_FAILED
+            assert exc_info.value.code == "NORMALIZATION_FAILED"
+            assert "Invalid structure" in exc_info.value.message
+
+    def test_onboarding_agent_raises_on_coverage_mismatch(self):
+        """Test that OnboardingAgent raises ExtractionError on coverage mismatch."""
+        from backend.onboarding import ExtractionError, CoverageReport
+
+        # Setup: M2 is detected but not in factory
+        ids = MagicMock(machine_ids={"M1", "M2"}, job_ids={"J1"})
+        coverage = CoverageReport(
+            detected_machines={"M1", "M2"},
+            detected_jobs={"J1"},
+            parsed_machines={"M1"},
+            parsed_jobs={"J1"},
+            missing_machines={"M2"},
+            missing_jobs=set(),
+            machine_coverage=0.5,
+            job_coverage=1.0,
+        )
+        factory = MagicMock(machines=[MagicMock(id="M1")], jobs=[MagicMock(id="J1")])
+
+        with patch("backend.agents.extract_explicit_ids", return_value=ids), \
+             patch("backend.agents.extract_coarse_structure") as mock_stage1, \
+             patch("backend.agents.extract_steps") as mock_stage2, \
+             patch("backend.agents.validate_and_normalize", return_value=factory), \
+             patch("backend.agents.assess_coverage", return_value=coverage):
+
+            mock_stage1.return_value = MagicMock(machines=[MagicMock(id="M1")], jobs=[MagicMock(id="J1")])
+            mock_stage2.return_value = MagicMock(machines=[MagicMock(id="M1")], jobs=[MagicMock(id="J1")])
+
             agent = OnboardingAgent()
-            result = agent.run("Some text")
 
-            # Should return toy factory
-            toy = build_toy_factory()
-            assert len(result.machines) == len(toy.machines)
-            assert len(result.jobs) == len(toy.jobs)
+            with pytest.raises(ExtractionError) as exc_info:
+                agent.run("Some text with M1, M2")
 
-    def test_onboarding_agent_falls_back_on_timeout(self):
-        """Test that OnboardingAgent falls back on timeout/network error."""
-        with patch("backend.agents.call_llm_json", side_effect=TimeoutError("Request timeout")):
-            agent = OnboardingAgent()
-            result = agent.run("Some text")
-
-            # Should return toy factory
-            toy = build_toy_factory()
-            assert len(result.machines) == len(toy.machines)
-
-    def test_onboarding_agent_handles_empty_input(self, sample_factory_config):
-        """Test that OnboardingAgent handles empty factory description."""
-        with patch("backend.agents.call_llm_json", return_value=sample_factory_config):
-            agent = OnboardingAgent()
-            result = agent.run("")
-
-            # Should still call LLM and return its result
-            assert result == sample_factory_config
+            # Should raise COVERAGE_MISMATCH
+            assert exc_info.value.code == "COVERAGE_MISMATCH"
+            assert "M2" in exc_info.value.message
 
     def test_onboarding_agent_with_minimal_factory(self):
         """Test OnboardingAgent with a minimal factory (1 machine, 1 job)."""
+        from backend.onboarding import (
+            ExplicitIds, CoarseStructure, CoarseMachine, CoarseJob,
+            RawFactoryConfig, RawJob, RawStep, CoverageReport,
+        )
+
         minimal_factory = FactoryConfig(
             machines=[Machine(id="M1", name="Machine")],
             jobs=[
@@ -146,7 +209,17 @@ class TestOnboardingAgentWithMockedLLM:
             ],
         )
 
-        with patch("backend.agents.call_llm_json", return_value=minimal_factory):
+        ids = ExplicitIds(machine_ids={"M1"}, job_ids={"J1"})
+        coarse = CoarseStructure(machines=[CoarseMachine(id="M1", name="Machine")], jobs=[CoarseJob(id="J1", name="Job")])
+        raw = RawFactoryConfig(machines=[CoarseMachine(id="M1", name="Machine")], jobs=[RawJob(id="J1", name="Job", steps=[RawStep(machine_id="M1", duration_hours=2)], due_time_hour=24)])
+        coverage = CoverageReport(detected_machines={"M1"}, detected_jobs={"J1"}, parsed_machines={"M1"}, parsed_jobs={"J1"}, missing_machines=set(), missing_jobs=set(), machine_coverage=1.0, job_coverage=1.0)
+
+        with patch("backend.agents.extract_explicit_ids", return_value=ids), \
+             patch("backend.agents.extract_coarse_structure", return_value=coarse), \
+             patch("backend.agents.extract_steps", return_value=raw), \
+             patch("backend.agents.validate_and_normalize", return_value=minimal_factory), \
+             patch("backend.agents.assess_coverage", return_value=coverage):
+
             agent = OnboardingAgent()
             result = agent.run("minimal factory")
 
@@ -156,20 +229,43 @@ class TestOnboardingAgentWithMockedLLM:
 
     def test_onboarding_agent_with_large_factory(self):
         """Test OnboardingAgent with a larger factory."""
+        from backend.onboarding import (
+            ExplicitIds, CoarseStructure, CoarseMachine, CoarseJob,
+            RawFactoryConfig, RawJob, RawStep, CoverageReport,
+        )
+
         large_factory = FactoryConfig(
             machines=[Machine(id=f"M{i}", name=f"Machine {i}") for i in range(1, 6)],
             jobs=[
                 Job(
                     id=f"J{i}",
                     name=f"Job {i}",
-                    steps=[Step(machine_id=f"M{(i % 5) + 1}", duration_hours=2 + i) for i in range(3)],
+                    steps=[Step(machine_id=f"M{(i % 5) + 1}", duration_hours=2 + j) for j in range(3)],
                     due_time_hour=12 + i,
                 )
                 for i in range(1, 8)
             ],
         )
 
-        with patch("backend.agents.call_llm_json", return_value=large_factory):
+        machine_ids = {f"M{i}" for i in range(1, 6)}
+        job_ids = {f"J{i}" for i in range(1, 8)}
+        ids = ExplicitIds(machine_ids=machine_ids, job_ids=job_ids)
+        coarse = CoarseStructure(
+            machines=[CoarseMachine(id=f"M{i}", name=f"Machine {i}") for i in range(1, 6)],
+            jobs=[CoarseJob(id=f"J{i}", name=f"Job {i}") for i in range(1, 8)],
+        )
+        raw = RawFactoryConfig(
+            machines=[CoarseMachine(id=f"M{i}", name=f"Machine {i}") for i in range(1, 6)],
+            jobs=[RawJob(id=f"J{i}", name=f"Job {i}", steps=[RawStep(machine_id=f"M{(i % 5) + 1}", duration_hours=2 + j) for j in range(3)], due_time_hour=12 + i) for i in range(1, 8)],
+        )
+        coverage = CoverageReport(detected_machines=machine_ids, detected_jobs=job_ids, parsed_machines=machine_ids, parsed_jobs=job_ids, missing_machines=set(), missing_jobs=set(), machine_coverage=1.0, job_coverage=1.0)
+
+        with patch("backend.agents.extract_explicit_ids", return_value=ids), \
+             patch("backend.agents.extract_coarse_structure", return_value=coarse), \
+             patch("backend.agents.extract_steps", return_value=raw), \
+             patch("backend.agents.validate_and_normalize", return_value=large_factory), \
+             patch("backend.agents.assess_coverage", return_value=coverage):
+
             agent = OnboardingAgent()
             result = agent.run("large factory")
 
@@ -178,26 +274,6 @@ class TestOnboardingAgentWithMockedLLM:
             # Each job should have 3 steps
             for job in result.jobs:
                 assert len(job.steps) == 3
-
-    def test_onboarding_agent_never_raises(self):
-        """Test that OnboardingAgent never raises, even on unexpected errors."""
-        # Test with various exception types
-        exceptions = [
-            RuntimeError("boom"),
-            ValueError("invalid"),
-            TypeError("wrong type"),
-            KeyError("missing key"),
-            Exception("generic error"),
-        ]
-
-        for exc in exceptions:
-            with patch("backend.agents.call_llm_json", side_effect=exc):
-                agent = OnboardingAgent()
-                result = agent.run("test")
-                # Should never raise; should return toy factory
-                assert isinstance(result, FactoryConfig)
-                assert len(result.machines) > 0
-                assert len(result.jobs) > 0
 
 
 class TestNormalizeScenarioSpec:

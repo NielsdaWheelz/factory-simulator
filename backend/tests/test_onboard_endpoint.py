@@ -171,29 +171,22 @@ class TestOnboardEndpoint:
         )
         assert response.status_code == 422  # Unprocessable entity
 
-    def test_onboard_with_normalization_warnings(self, client, monkeypatch):
-        """Test that normalization warnings are included in onboarding_errors."""
-        # Create a factory with bad durations and invalid machine refs
-        bad_factory = FactoryConfig(
-            machines=[
-                Machine(id="M1", name="Assembly"),
-                Machine(id="M2", name="Drill"),
-            ],
-            jobs=[
-                Job(
-                    id="J1",
-                    name="Job 1",
-                    steps=[
-                        Step(machine_id="M1", duration_hours=0),  # Bad duration
-                        Step(machine_id="M999", duration_hours=2),  # Invalid machine ref
-                    ],
-                    due_time_hour=24,
-                ),
-            ],
-        )
+    def test_onboard_with_coverage_mismatch_falls_back(self, client, monkeypatch):
+        """Test that OnboardingAgent raising COVERAGE_MISMATCH triggers fallback."""
+        from backend.onboarding import ExtractionError
 
+        # Agent raises coverage mismatch error
         def mock_onboarding_agent_run(self, factory_text):
-            return bad_factory
+            raise ExtractionError(
+                code="COVERAGE_MISMATCH",
+                message="coverage mismatch: missing machines ['M2'], missing jobs []",
+                details={
+                    "missing_machines": ["M2"],
+                    "missing_jobs": [],
+                    "machine_coverage": 0.5,
+                    "job_coverage": 1.0,
+                },
+            )
 
         monkeypatch.setattr(
             "backend.agents.OnboardingAgent.run",
@@ -202,41 +195,37 @@ class TestOnboardEndpoint:
 
         response = client.post(
             "/api/onboard",
-            json={"factory_description": "bad factory"},
+            json={"factory_description": "factory with M1, M2"},
         )
 
         assert response.status_code == 200
         data = response.json()
 
-        # Verify normalization warnings are in onboarding_errors
+        # Verify fallback and error message
         meta = data["meta"]
-        assert isinstance(meta["onboarding_errors"], list)
+        assert meta["used_default_factory"] is True
         assert len(meta["onboarding_errors"]) > 0
+        assert "COVERAGE_MISMATCH" in meta["onboarding_errors"][0]
 
-        # Check that specific warning about bad duration is present
-        error_messages = "\n".join(meta["onboarding_errors"])
-        assert "duration_hours" in error_messages.lower() or "dropped" in error_messages.lower()
+        # Should have fallback factory
+        factory = data["factory"]
+        assert len(factory["machines"]) == 3  # toy factory
 
-        # Factory should not be fallback (still has valid job with one valid step)
-        assert meta["used_default_factory"] is False
+    def test_onboard_fallback_on_normalization_error(self, client, monkeypatch):
+        """Test fallback when agent raises NORMALIZATION_FAILED."""
+        from backend.onboarding import ExtractionError
 
-    def test_onboard_fallback_on_empty_machines(self, client, monkeypatch):
-        """Test fallback when normalization results in zero machines."""
-        # Factory with no machines
-        empty_machines_factory = FactoryConfig(
-            machines=[],
-            jobs=[
-                Job(
-                    id="J1",
-                    name="Job 1",
-                    steps=[Step(machine_id="M1", duration_hours=2)],
-                    due_time_hour=24,
-                ),
-            ],
-        )
-
+        # Agent raises normalization error
         def mock_onboarding_agent_run(self, factory_text):
-            return empty_machines_factory
+            raise ExtractionError(
+                code="NORMALIZATION_FAILED",
+                message="Jobs were lost during normalization: ['J1']",
+                details={
+                    "raw_job_ids": ["J1"],
+                    "normalized_job_ids": [],
+                    "missing_job_ids": ["J1"],
+                },
+            )
 
         monkeypatch.setattr(
             "backend.agents.OnboardingAgent.run",
@@ -245,7 +234,7 @@ class TestOnboardEndpoint:
 
         response = client.post(
             "/api/onboard",
-            json={"factory_description": "factory with no machines"},
+            json={"factory_description": "factory with bad jobs"},
         )
 
         assert response.status_code == 200
@@ -259,26 +248,21 @@ class TestOnboardEndpoint:
         assert len(factory["machines"]) == 3
         assert len(factory["jobs"]) == 3
 
-    def test_onboard_fallback_on_empty_jobs(self, client, monkeypatch):
-        """Test fallback when normalization results in zero jobs."""
-        # Factory with valid machines but jobs with only invalid machine refs
-        empty_jobs_factory = FactoryConfig(
-            machines=[
-                Machine(id="M1", name="Assembly"),
-                Machine(id="M2", name="Drill"),
-            ],
-            jobs=[
-                Job(
-                    id="J1",
-                    name="Job 1",
-                    steps=[Step(machine_id="M999", duration_hours=2)],  # Invalid ref
-                    due_time_hour=24,
-                ),
-            ],
-        )
+    def test_onboard_fallback_on_invalid_structure(self, client, monkeypatch):
+        """Test fallback when agent raises INVALID_STRUCTURE."""
+        from backend.onboarding import ExtractionError
 
+        # Agent raises structure error (during normalization)
         def mock_onboarding_agent_run(self, factory_text):
-            return empty_jobs_factory
+            raise ExtractionError(
+                code="INVALID_STRUCTURE",
+                message="Step in job J1 references non-existent machine M999",
+                details={
+                    "job_id": "J1",
+                    "step_machine_id": "M999",
+                    "available_machines": ["M1", "M2"],
+                },
+            )
 
         monkeypatch.setattr(
             "backend.agents.OnboardingAgent.run",
@@ -407,24 +391,21 @@ class TestOnboardEndpoint:
         assert "factory" in data
         assert "meta" in data
 
-    def test_onboard_with_negative_due_time(self, client, monkeypatch):
-        """Test that negative due times are normalized and warnings generated."""
-        bad_due_time_factory = FactoryConfig(
-            machines=[
-                Machine(id="M1", name="Assembly"),
-            ],
-            jobs=[
-                Job(
-                    id="J1",
-                    name="Job 1",
-                    steps=[Step(machine_id="M1", duration_hours=2)],
-                    due_time_hour=-5,  # Negative due time
-                ),
-            ],
-        )
+    def test_onboard_with_invalid_due_time_fallback(self, client, monkeypatch):
+        """Test that agent raises error for invalid due_time_hour and triggers fallback."""
+        from backend.onboarding import ExtractionError
 
+        # Agent raises validation error for negative due_time_hour
         def mock_onboarding_agent_run(self, factory_text):
-            return bad_due_time_factory
+            raise ExtractionError(
+                code="INVALID_STRUCTURE",
+                message="Job J1 has invalid due_time_hour: -5",
+                details={
+                    "job_id": "J1",
+                    "due_time_hour": -5,
+                    "valid_range": "0-24",
+                },
+            )
 
         monkeypatch.setattr(
             "backend.agents.OnboardingAgent.run",
@@ -440,11 +421,11 @@ class TestOnboardEndpoint:
         data = response.json()
         meta = data["meta"]
 
-        # Should have a warning about due_time_hour
-        assert meta["used_default_factory"] is False
+        # Should have fallback due to validation error
+        assert meta["used_default_factory"] is True
         assert len(meta["onboarding_errors"]) > 0
         error_msg = "\n".join(meta["onboarding_errors"])
-        assert "due_time_hour" in error_msg.lower() or "clamped" in error_msg.lower()
+        assert "INVALID_STRUCTURE" in error_msg
 
     def test_onboard_inferred_assumptions_empty(self, client, valid_factory_config, monkeypatch):
         """Verify inferred_assumptions is empty in PR1 (stub version)."""
@@ -518,39 +499,20 @@ class TestOnboardEndpoint:
         assert "meta" in data
 
     def test_onboard_mixed_valid_and_invalid_jobs(self, client, monkeypatch):
-        """Test with mixed valid and invalid jobs."""
-        mixed_factory = FactoryConfig(
-            machines=[
-                Machine(id="M1", name="Assembly"),
-                Machine(id="M2", name="Drill"),
-            ],
-            jobs=[
-                # Valid job
-                Job(
-                    id="J1",
-                    name="Good Job",
-                    steps=[Step(machine_id="M1", duration_hours=2)],
-                    due_time_hour=24,
-                ),
-                # Job with invalid machine ref (will be dropped)
-                Job(
-                    id="J2",
-                    name="Bad Job",
-                    steps=[Step(machine_id="M999", duration_hours=2)],
-                    due_time_hour=24,
-                ),
-                # Job with bad duration (will be normalized)
-                Job(
-                    id="J3",
-                    name="Bad Duration Job",
-                    steps=[Step(machine_id="M2", duration_hours=0)],
-                    due_time_hour=24,
-                ),
-            ],
-        )
+        """Test that agent raises error when LLM produces jobs with invalid refs."""
+        from backend.onboarding import ExtractionError
 
+        # Agent raises error because LLM created jobs with invalid machine refs
         def mock_onboarding_agent_run(self, factory_text):
-            return mixed_factory
+            raise ExtractionError(
+                code="INVALID_STRUCTURE",
+                message="Step in job J2 references non-existent machine M999",
+                details={
+                    "job_id": "J2",
+                    "step_machine_id": "M999",
+                    "available_machines": ["M1", "M2"],
+                },
+            )
 
         monkeypatch.setattr(
             "backend.agents.OnboardingAgent.run",
@@ -565,20 +527,15 @@ class TestOnboardEndpoint:
         assert response.status_code == 200
         data = response.json()
         meta = data["meta"]
-        factory = data["factory"]
 
-        # Should not use fallback (has valid jobs)
-        assert meta["used_default_factory"] is False
-
-        # Should have warnings about dropped and normalized jobs
+        # Should fallback due to invalid structure
+        assert meta["used_default_factory"] is True
         assert len(meta["onboarding_errors"]) > 0
 
-        # Should have at least J1 and J3 (J2 dropped due to invalid refs)
-        job_ids = {job["id"] for job in factory["jobs"]}
-        assert "J1" in job_ids
-        assert "J3" in job_ids
-        # J2 should be dropped
-        assert "J2" not in job_ids
+        # Should return toy factory
+        factory = data["factory"]
+        assert len(factory["machines"]) == 3  # toy factory
+        assert len(factory["jobs"]) == 3
 
 
 class TestOnboardEndpointWithLLMAgent:
@@ -649,12 +606,22 @@ class TestOnboardEndpointWithLLMAgent:
         assert factory["jobs"][0]["id"] == "JOB_A"
         assert factory["jobs"][0]["due_time_hour"] == 10
 
-    def test_onboard_falls_back_if_onboarding_agent_returns_empty_factory(self, client, monkeypatch):
-        """Test that /api/onboard falls back if OnboardingAgent returns empty factory."""
-        empty_factory = FactoryConfig(machines=[], jobs=[])
+    def test_onboard_raises_on_empty_detected_ids(self, client, monkeypatch):
+        """Test that agent raises error when no IDs are detected in text."""
+        from backend.onboarding import ExtractionError
 
+        # Agent raises error because no machine/job IDs detected in text
         def mock_onboarding_agent_run(self, factory_text):
-            return empty_factory
+            raise ExtractionError(
+                code="COVERAGE_MISMATCH",
+                message="coverage mismatch: no IDs detected in text",
+                details={
+                    "missing_machines": [],
+                    "missing_jobs": [],
+                    "machine_coverage": 1.0,
+                    "job_coverage": 1.0,
+                },
+            )
 
         monkeypatch.setattr(
             "backend.agents.OnboardingAgent.run",
@@ -663,7 +630,7 @@ class TestOnboardEndpointWithLLMAgent:
 
         response = client.post(
             "/api/onboard",
-            json={"factory_description": "This results in empty factory"},
+            json={"factory_description": "This has no machine or job IDs"},
         )
 
         assert response.status_code == 200
@@ -683,40 +650,21 @@ class TestOnboardEndpointWithLLMAgent:
         toy = build_toy_factory()
         assert factory["machines"][0]["id"] == toy.machines[0].id
 
-    def test_onboard_llm_agent_with_partially_valid_factory(self, client, monkeypatch):
-        """Test /api/onboard when OnboardingAgent returns factory with some invalid data."""
-        partially_valid_factory = FactoryConfig(
-            machines=[
-                Machine(id="M1", name="Machine 1"),
-                Machine(id="M2", name="Machine 2"),
-            ],
-            jobs=[
-                # Valid job
-                Job(
-                    id="J1",
-                    name="Job 1",
-                    steps=[Step(machine_id="M1", duration_hours=3)],
-                    due_time_hour=12,
-                ),
-                # Job with invalid machine reference
-                Job(
-                    id="J2",
-                    name="Job 2",
-                    steps=[Step(machine_id="M999", duration_hours=2)],
-                    due_time_hour=15,
-                ),
-                # Job with bad duration
-                Job(
-                    id="J3",
-                    name="Job 3",
-                    steps=[Step(machine_id="M2", duration_hours=0)],
-                    due_time_hour=20,
-                ),
-            ],
-        )
+    def test_onboard_llm_agent_detects_invalid_data_and_falls_back(self, client, monkeypatch):
+        """Test that agent detects invalid data in LLM response and raises error."""
+        from backend.onboarding import ExtractionError
 
+        # Agent detected that LLM produced jobs with invalid machine refs
         def mock_onboarding_agent_run(self, factory_text):
-            return partially_valid_factory
+            raise ExtractionError(
+                code="INVALID_STRUCTURE",
+                message="Step in job J2 references non-existent machine M999",
+                details={
+                    "job_id": "J2",
+                    "step_machine_id": "M999",
+                    "available_machines": ["M1", "M2"],
+                },
+            )
 
         monkeypatch.setattr(
             "backend.agents.OnboardingAgent.run",
@@ -733,19 +681,12 @@ class TestOnboardEndpointWithLLMAgent:
         factory = data["factory"]
         meta = data["meta"]
 
-        # Should NOT use fallback (has valid jobs after repair)
-        assert meta["used_default_factory"] is False
+        # Should use fallback due to invalid structure
+        assert meta["used_default_factory"] is True
 
-        # Should have errors for normalization
+        # Should have errors
         assert len(meta["onboarding_errors"]) > 0
 
-        # Jobs should be filtered/normalized
-        job_ids = {job["id"] for job in factory["jobs"]}
-        assert "J1" in job_ids  # Valid job preserved
-        assert "J2" not in job_ids  # Job with invalid machine ref dropped
-        assert "J3" in job_ids  # Job with bad duration normalized (not dropped)
-
-        # Check that J3's duration was normalized to 1
-        j3 = next((j for j in factory["jobs"] if j["id"] == "J3"), None)
-        assert j3 is not None
-        assert j3["steps"][0]["duration_hours"] == 1  # Normalized from 0
+        # Should be toy factory
+        assert len(factory["machines"]) == 3
+        assert len(factory["jobs"]) == 3

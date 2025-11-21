@@ -1,0 +1,405 @@
+# Adversarial Evaluation Case Corpus
+# This file defines test cases for the adversarial evaluation harness.
+# Each case exercises different edge cases, input patterns, and factory structures.
+
+cases:
+  # Case 1: Clean, canonical factory
+  - id: clean_canonical
+    kind: simulate
+    factory_description: |
+      Factory Layout:
+
+      Machines:
+      - M1: Assembly workstation
+      - M2: Drill and mill station
+      - M3: Packaging station
+
+      Jobs:
+      - Job J1 (Widget A):
+        Step 1: M1 for 2 hours
+        Step 2: M2 for 3 hours
+        Step 3: M3 for 1 hour
+        Due: 10am
+
+      - Job J2 (Gadget B):
+        Step 1: M1 for 1 hour
+        Step 2: M2 for 4 hours
+        Step 3: M3 for 2 hours
+        Due: 12pm
+
+      - Job J3 (Part C):
+        Step 1: M1 for 1 hour
+        Step 2: M2 for 2 hours
+        Due: 9am
+    situation_text: |
+      Process the jobs in the usual manner. M2 is typically the bottleneck.
+      Ensure all jobs complete by their due time if possible.
+    tags: ["clean", "canonical", "baseline"]
+
+  # Case 2: Messy SOP-like prose
+  - id: messy_sop
+    kind: simulate
+    factory_description: |
+      MANUFACTURING OPERATIONAL MANUAL
+
+      1. OVERVIEW & BACKGROUND
+      Our facility has grown significantly over the past few years. We currently operate
+      three main stations: the assembly area (M1), the precision drilling/milling center (M2),
+      and the final packing & shipping station (M3). This document outlines current workloads
+      as of this quarter.
+
+      2. EQUIPMENT STATUS
+      M1 is our primary assembly line, can handle any incoming job initially.
+      M2 is specialized, slower due to precision requirements.
+      M3 packages everything at the end.
+
+      3. CURRENT JOB QUEUE (as of today)
+
+      Widget A (called J1 internally):
+      - Assembly: ~2 hours at M1
+      - Precision work: ~3 hours at M2
+      - Final packing: ~1 hour at M3
+      - Customer requested delivery by 10 in the morning
+
+      Gadget B (coded J2):
+      - Quick assembly at M1: 1 hour or so
+      - Heavy drilling and milling at M2: about 4 hours, sometimes 5
+      - Boxing at M3: 2 hours
+      - Needs to ship ASAP, target is noon (12pm)
+
+      Part C is simpler (J3):
+      - Put together at M1: 1 hour
+      - Quick precision touch-up at M2: 2 hours
+      - Done, no packing needed (ships directly)
+      - Customer needs it by 9am or face penalties
+
+      4. NOTES & ASSUMPTIONS
+      Typical day starts at midnight (0am). All times above are man-hours or elapsed time,
+      not clock times. Due times are indicated as desired completion clock times measured
+      from the start of the day.
+    situation_text: |
+      It's rush hour. Two orders just came in with conflicting priorities. Can we make them
+      all on time? How does the factory perform under normal operation without the rush?
+    tags: ["messy", "sop", "prose", "realistic"]
+
+  # Case 3: Contradictory information
+  - id: contradictory_info
+    kind: simulate
+    factory_description: |
+      We have a 3-machine factory.
+
+      Machine List:
+      - M1 (Assembly)
+      - M2 (Precision)
+      - M3 (Packing)
+
+      Jobs:
+
+      Job J1:
+        - M1 for 2 hours → M2 for 3 hours → M3 for 1 hour
+        - Due: 10am
+        - Alternative description: M1 for 4 hours → M3 for 1 hour (no M2 step)
+        - Conflicting due time: Must finish by 8am (elsewhere in SOP says 10am)
+
+      Job J2:
+        - M1 for 1 hour → M2 for 4 hours → M3 for 2 hours
+        - Due: 12pm
+        - Also known as: M1 for 2 hours → M2 for 2 hours
+        - Due time conflict: 2pm (contradicts 12pm above)
+
+      Job J3:
+        - M1 for 1 hour → M2 for 2 hours
+        - Due: 9am
+        - Or alternatively: Just M2 for 2 hours (skip M1)
+    situation_text: |
+      We need to resolve conflicts in the SOP and figure out what the actual constraints are.
+      How would you handle ambiguity in the factory definition?
+    tags: ["contradictory", "ambiguous", "sop"]
+
+  # Case 4: Missing machines / invalid references
+  - id: missing_machines
+    kind: simulate
+    factory_description: |
+      We operate with these machines:
+      - Assembly Station (M1)
+      - Precision Drill (M2)
+
+      (Note: We used to have a packaging station M3, but it was decommissioned last quarter.)
+
+      Jobs to process:
+
+      Job J1:
+        - Assembly (M1): 2 hours
+        - Precision Drill (M2): 3 hours
+        - Final Packing (M3): 1 hour  [NOTE: M3 is offline, but let's include this anyway]
+        - Due: 10am
+
+      Job J2:
+        - Assembly: 1 hour (on M1)
+        - Milling (M2): 4 hours
+        - Finishing (M4): 1 hour  [NOTE: M4 was never mentioned; unclear if it exists]
+        - Due: 12pm
+
+      Job J3:
+        - M1: 1 hour
+        - M2: 2 hours
+        - Due: 9am
+    situation_text: |
+      We're scaling down operations. Some equipment is offline. What happens to jobs
+      that reference unavailable machines?
+    tags: ["missing_machines", "invalid_refs", "decommissioned"]
+
+  # Case 5: Large factory (stress caps)
+  - id: large_factory
+    kind: simulate
+    factory_description: |
+      We've expanded significantly! We now operate 8 machines and handle 20+ jobs daily.
+
+      Machines:
+      - M1: Assembly (primary)
+      - M2: Precision drilling
+      - M3: Milling and finishing
+      - M4: Quality check
+      - M5: Packaging
+      - M6: Secondary assembly
+      - M7: Coating station
+      - M8: Final inspection
+
+      Representative sample of 20 jobs:
+
+      J1 (Widget A): M1→2h, M2→3h, M4→1h, M5→2h. Due: 10am.
+      J2 (Gadget B): M1→1h, M3→4h, M4→2h, M5→1h. Due: 12pm.
+      J3 (Part C): M1→1h, M2→2h, M3→1h, M4→1h. Due: 9am.
+      J4 (Component D): M6→3h, M2→2h, M5→1h. Due: 14:00.
+      J5 (Assembly E): M1→2h, M7→3h, M8→1h. Due: 16:00.
+      J6 (Frame F): M3→4h, M2→1h, M5→2h. Due: 18:00.
+      J7 (Bracket G): M6→1h, M4→2h, M5→1h. Due: 11am.
+      J8 (Support H): M1→1h, M2→3h, M4→2h, M8→1h. Due: 13:00.
+      J9 (Shaft I): M2→2h, M3→3h, M4→1h, M5→1h. Due: 15:00.
+      J10 (Pin J): M1→1h, M3→2h, M4→1h. Due: 10:30am.
+      J11 (Washer K): M6→1h, M2→1h, M5→2h. Due: 12:30pm.
+      J12 (Seal L): M3→2h, M4→1h, M5→1h. Due: 14:00.
+      J13 (Bolt M): M1→1h, M2→2h, M3→1h, M4→1h. Due: 11:30am.
+      J14 (Nut N): M6→1h, M4→1h, M5→1h. Due: 13:00.
+      J15 (Rod O): M2→3h, M3→2h, M4→1h. Due: 15:30.
+      J16 (Spring P): M1→2h, M4→2h, M5→1h. Due: 16:30.
+      J17 (Link Q): M3→3h, M2→1h, M5→1h. Due: 17:00.
+      J18 (Block R): M6→2h, M3→1h, M4→2h, M5→1h. Due: 18:00.
+      J19 (Plate S): M1→1h, M2→4h, M4→1h. Due: 17:30.
+      J20 (Strip T): M3→2h, M4→1h, M5→2h, M8→1h. Due: 19:00.
+    situation_text: |
+      Daily operations with full capacity. How does scheduling scale with many jobs and machines?
+    tags: ["large", "stress", "caps", "scaling"]
+
+  # Case 6: Negative, zero, and fractional durations
+  - id: invalid_durations
+    kind: simulate
+    factory_description: |
+      Interesting edge cases with timing:
+
+      Machines: M1, M2, M3
+
+      Job J1:
+        - M1: 2 hours
+        - M2: 3 hours
+        - M3: 1 hour
+        - Due: 10am
+
+      Job J2 (problematic):
+        - M1: -1 hour (negative! error in data entry?)
+        - M2: 0 hours (instant? or missing?)
+        - M3: 0.5 hours (fractional, but maybe it's listed as "half an hour"?)
+        - Due: 12pm
+
+      Job J3 (another weird case):
+        - M1: 1 hour
+        - M2: -2 hours (clearly wrong)
+        - M3: 0 hours
+        - Due: 9am
+    situation_text: |
+      Data quality issues detected. How does the system handle malformed duration inputs?
+    tags: ["negative_durations", "zero_durations", "fractional", "data_quality"]
+
+  # Case 7: Circular / weird routing
+  - id: circular_routing
+    kind: simulate
+    factory_description: |
+      Unconventional job routing:
+
+      Machines: M1, M2, M3
+
+      Job J1 (normal):
+        - M1: 2 hours
+        - M2: 3 hours
+        - M3: 1 hour
+        - Due: 10am
+
+      Job J2 (bouncy):
+        - M1: 1 hour (initial assembly)
+        - M2: 2 hours (precision work)
+        - M1: 1 hour (back to assembly for touch-ups?!)
+        - M3: 1 hour (final packing)
+        - Due: 12pm
+
+      Job J3 (spiral):
+        - M2: 1 hour
+        - M3: 2 hours
+        - M2: 1 hour (back to precision)
+        - M1: 1 hour (final assembly)
+        - M3: 1 hour (repacking)
+        - Due: 9am
+    situation_text: |
+      Non-linear routings and revisits. Does the system assume strictly serial, forward-only job flows?
+    tags: ["circular_routing", "revisits", "non_linear"]
+
+  # Case 8: Empty / trivial factory
+  - id: empty_factory
+    kind: onboard_only
+    factory_description: |
+      ...
+    situation_text: ""
+    tags: ["empty", "trivial", "fallback"]
+
+  # Case 9: Impossible constraints
+  - id: impossible_constraints
+    kind: simulate
+    factory_description: |
+      Standard 3-machine factory:
+      - M1 (Assembly): 1 worker
+      - M2 (Precision): 1 worker, but very slow (high precision)
+      - M3 (Packing): 1 worker
+
+      Jobs:
+      - J1: M1→2h, M2→3h, M3→1h. Due: 10am.
+      - J2: M1→1h, M2→4h, M3→2h. Due: 11am.
+      - J3: M1→1h, M2→2h, M3→1h. Due: 10:30am.
+    situation_text: |
+      EMERGENCY! All three jobs MUST complete by 10am. Additionally:
+      - M2 is offline for maintenance all morning (0am to 10am).
+      - All three jobs require M2 processing.
+      - We cannot defer any jobs or skip any steps.
+      - Customer penalties are severe.
+
+      What's the best we can do? (Spoiler: it's impossible.)
+    tags: ["impossible", "constraints", "impossible_schedule", "emergency"]
+
+  # Case 10: Slightly noisy but realistic
+  - id: noisy_realistic
+    kind: simulate
+    factory_description: |
+      DAILY PRODUCTION SCHEDULE
+
+      Our factory operates continuously, and we manage several key product lines.
+
+      MACHINES:
+      M1 - Assembly line (main production line)
+      M2 - Quality control / precision machining (shared bottleneck)
+      M3 - Packaging & shipping (final step)
+
+      ACTIVE ORDERS:
+
+      Order #001 - "Widget A" (Internal ID: J1)
+      Processing flow:
+        Assembly at M1 ......... approx 2 hours
+        QC and precision at M2.. approximately 3 hours (sometimes 2-3 hrs)
+        Packing at M3 ......... ~1 hour
+      Customer promised delivery: 10am (10:00, or EOD 10:00 local time)
+
+      Order #002 - "Gadget B" (Job code J2)
+      Steps in order:
+        1) M1 assembly - 1 hour
+        2) M2 QC/precision - ~4 hours (can be anywhere from 3.5 to 4.5)
+        3) M3 packaging - 2 hours
+      Promised to customer: Noon (12:00pm)
+
+      Order #003 - "Part C" (coded as J3)
+      Production sequence:
+        Start at M1 - 1 hour
+        Then M2 - 2 hours
+        Ship directly (no M3 required)
+      Delivery target: 9:00am sharp
+
+      NOTES:
+      - Times are nominal; actual durations may vary slightly.
+      - M2 is typically the slowest step and is our constraint.
+      - Assume standard business day starting at midnight (0:00).
+    situation_text: |
+      Production supervisor reports a normal day with standard orders. Can we meet all
+      customer commitments? What's our capacity margin? Briefly assess the feasibility.
+    tags: ["noisy", "realistic", "normal_day", "standard"]
+
+  # Case 11 (bonus): Numeric text in due times
+  - id: numeric_due_times
+    kind: simulate
+    factory_description: |
+      Simple factory setup:
+
+      Machines: M1 (assembly), M2 (processing), M3 (packing)
+
+      Job J1:
+        - M1: 2 hours
+        - M2: 3 hours
+        - M3: 1 hour
+        - Due: 10 (meaning 10am)
+
+      Job J2:
+        - M1: 1 hour
+        - M2: 4 hours
+        - M3: 2 hours
+        - Due: 12 (meaning 12pm/noon)
+
+      Job J3:
+        - M1: 1 hour
+        - M2: 2 hours
+        - Due: 9 (meaning 9am)
+    situation_text: |
+      Normal operations. How does the system interpret pure numeric due times?
+    tags: ["numeric", "due_times", "time_parsing"]
+
+  # Case 12 (bonus): Very short durations (all 1-hour jobs)
+  - id: short_durations
+    kind: simulate
+    factory_description: |
+      Fast-turnaround factory (all minimal processing):
+
+      Machines: M1, M2, M3
+
+      Job J1:
+        - M1: 1 hour
+        - M2: 1 hour
+        - M3: 1 hour
+        - Due: 10am
+
+      Job J2:
+        - M1: 1 hour
+        - M2: 1 hour
+        - M3: 1 hour
+        - Due: 12pm
+
+      Job J3:
+        - M1: 1 hour
+        - M2: 1 hour
+        - Due: 9am
+    situation_text: |
+      High-velocity, low-processing-time orders. Everything is quick.
+    tags: ["short_durations", "fast_turnaround", "minimal"]
+
+  # Case 13: Fractional durations (mixed integer/fractional) — regression test for PR6
+  - id: fractional_3m_4j
+    kind: simulate
+    factory_description: |
+      We run 3 machines (M1 assembly, M2 drill, M3 pack).
+      Jobs J1, J2, J3, J4 each pass through those machines in sequence.
+      J1 takes 2h on M1, 3h on M2, 1h on M3 (total 6h).
+      J2 takes 1.5h on M1, 2h on M2, 1.5h on M3 (total 5h).
+      J3 takes 3h on M1, 1h on M2, 2h on M3 (total 6h).
+      J4 takes 2h on M1, 2h on M2, 4h on M3 (total 8h).
+    situation_text: |
+      Today is a normal production day. No rush orders or unexpected events.
+      We want to understand baseline performance and identify bottlenecks.
+    expectations:
+      min_machines: 3
+      min_jobs: 4
+      allow_toy_factory: false
+      allow_fallback: false
+    tags: ["fractional_durations", "mixed_integer", "4jobs_3machines", "regression_pr6"]

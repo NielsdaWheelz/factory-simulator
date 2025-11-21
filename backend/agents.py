@@ -34,86 +34,170 @@ from pydantic import BaseModel
 from .models import ScenarioSpec, ScenarioType, ScenarioMetrics, FactoryConfig
 from .world import build_toy_factory
 from .llm import call_llm_json
+from .onboarding import (
+    extract_explicit_ids,
+    extract_coarse_structure,
+    extract_steps,
+    validate_and_normalize,
+    assess_coverage,
+    ExtractionError,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class OnboardingAgent:
-    """LLM-backed agent for factory description parsing.
+    """LLM-backed agent for factory description parsing with multi-stage orchestration.
 
-    Takes a free-text factory description and interprets it into a FactoryConfig
-    using an LLM. Falls back gracefully to toy factory on any error.
+    PR4: Implements multi-stage pipeline for factory parsing:
+    - Stage 0: Extract explicit IDs (regex-based, zero-LLM)
+    - Stage 1: Extract coarse structure (machines/jobs only)
+    - Stage 2: Extract job steps and timings
+    - Stage 3: Validate and normalize to strict FactoryConfig
+    - Stage 4: Assess coverage and enforce 100% ID coverage
 
-    Prompt includes:
-    - Time interpretation rules (by 10am → 10, etc.)
-    - Inference envelope (what's allowed/forbidden)
-    - Schema definition and example
-    - Explicit instructions for JSON output
+    Enforces 100% ID coverage: all machine/job IDs mentioned in text must appear in final config.
+    Raises ExtractionError on any failure (including coverage mismatch).
+    Does NOT call build_toy_factory or implement fallback; that's the caller's responsibility.
 
-    Error handling: Never throws. Catches all exceptions and returns toy factory.
+    Error handling: Raises ExtractionError on any failure (coverage mismatch, LLM errors, etc).
+    Caller (e.g., run_onboarding) decides fallback strategy.
     """
 
     def run(self, factory_text: str) -> FactoryConfig:
         """
-        Parse factory text into a FactoryConfig using LLM.
+        Orchestrate multi-stage factory parsing pipeline with coverage enforcement.
 
-        Happy path:
-        - Calls call_llm_json with a carefully designed prompt
-        - Returns the LLM-produced FactoryConfig
+        Pipeline stages:
+        0. extract_explicit_ids(text) → ExplicitIds (regex, deterministic)
+        1. extract_coarse_structure(text, ids) → CoarseStructure (LLM)
+        2. extract_steps(text, coarse) → RawFactoryConfig (LLM)
+        3. validate_and_normalize(raw) → FactoryConfig (strict validation)
+        4. assess_coverage(ids, factory) → CoverageReport (coverage check)
 
-        On any error:
-        - Logs the error with truncated factory_text and error details
-        - Returns build_toy_factory() as fallback
-        - Does not raise
+        Enforces 100% ID coverage:
+        - If any detected machine/job ID is not in final factory, raises ExtractionError
+        - Error code: "COVERAGE_MISMATCH"
+        - Includes missing IDs and coverage ratios in details
+
+        Error handling:
+        - ExtractionError from any stage: re-raise as-is
+        - Other exceptions from stages 0-2 (LLM calls, validation):
+          - Wrapped into ExtractionError with code="LLM_FAILURE" or appropriate mapping
+          - Original message (truncated to 200 chars) in error message
+          - Stage name in details for debugging
+        - Does NOT call fallback; caller handles it
+
+        Logging (minimal, info/debug):
+        - Once at start: input text length
+        - After each stage: entity counts (machines, jobs, coverage ratios)
+        - No full text dumps, no full JSON
 
         Args:
-            factory_text: Free-form factory description
+            factory_text: Free-form factory description (user input)
 
         Returns:
-            FactoryConfig (from LLM on success, toy factory on error)
+            FactoryConfig with 100% ID coverage (guaranteed on success)
+
+        Raises:
+            ExtractionError: on any failure (coverage mismatch, LLM error, validation error, etc)
         """
         # Log input
-        preview = factory_text[:200] if factory_text else "(empty)"
-        logger.debug(f"OnboardingAgent: received factory_text len={len(factory_text)}, preview={preview}...")
+        logger.info(f"OnboardingAgent.run: factory_text len={len(factory_text)}")
 
+        # ========== Stage 0: Extract explicit IDs ==========
+        logger.debug("OnboardingAgent: Stage 0 - extracting explicit machine/job IDs...")
+        ids = extract_explicit_ids(factory_text)
+        logger.debug(
+            f"OnboardingAgent: Stage 0 complete - detected machines={len(ids.machine_ids)}, "
+            f"jobs={len(ids.job_ids)}"
+        )
+
+        # ========== Stage 1: Extract coarse structure ==========
+        logger.debug("OnboardingAgent: Stage 1 - extracting coarse structure (machines/jobs only)...")
         try:
-            # Build prompt
-            prompt = self._build_prompt(factory_text)
-
-            # Call LLM
-            cfg = call_llm_json(prompt=prompt, response_model=FactoryConfig)
-
-            # Log success
-            total_steps = sum(len(job.steps) for job in cfg.jobs)
+            coarse = extract_coarse_structure(factory_text, ids)
             logger.debug(
-                f"OnboardingAgent: produced factory with {len(cfg.machines)} machines, "
-                f"{len(cfg.jobs)} jobs, {total_steps} total steps"
+                f"OnboardingAgent: Stage 1 complete - coarse machines={len(coarse.machines)}, "
+                f"jobs={len(coarse.jobs)}"
             )
-
-            return cfg
-
+        except ExtractionError:
+            raise  # Re-raise as-is
         except Exception as e:
-            # Log error and return fallback
-            logger.warning(
-                f"OnboardingAgent: LLM call failed, falling back to toy factory: {type(e).__name__}: {str(e)[:100]}"
+            raise ExtractionError(
+                code="LLM_FAILURE",
+                message=str(e)[:200],
+                details={"stage": "coarse_extraction", "error_type": type(e).__name__},
             )
-            return build_toy_factory()
+
+        # ========== Stage 2: Extract steps and timings ==========
+        logger.debug("OnboardingAgent: Stage 2 - extracting job steps and timings...")
+        try:
+            raw = extract_steps(factory_text, coarse)
+            logger.debug(
+                f"OnboardingAgent: Stage 2 complete - raw machines={len(raw.machines)}, "
+                f"jobs={len(raw.jobs)}"
+            )
+        except ExtractionError:
+            raise  # Re-raise as-is
+        except Exception as e:
+            raise ExtractionError(
+                code="LLM_FAILURE",
+                message=str(e)[:200],
+                details={"stage": "fine_extraction", "error_type": type(e).__name__},
+            )
+
+        # ========== Stage 3: Validate and normalize ==========
+        logger.debug("OnboardingAgent: Stage 3 - validating and normalizing...")
+        try:
+            factory = validate_and_normalize(raw)
+            logger.debug(
+                f"OnboardingAgent: Stage 3 complete - factory machines={len(factory.machines)}, "
+                f"jobs={len(factory.jobs)}"
+            )
+        except ExtractionError:
+            raise  # Re-raise as-is
+        except Exception as e:
+            raise ExtractionError(
+                code="NORMALIZATION_FAILED",
+                message=str(e)[:200],
+                details={"stage": "normalization", "error_type": type(e).__name__},
+            )
+
+        # ========== Stage 4: Assess coverage ==========
+        logger.debug("OnboardingAgent: Stage 4 - assessing coverage...")
+        coverage = assess_coverage(ids, factory)
+        logger.debug(
+            f"OnboardingAgent: Stage 4 complete - coverage: machines={coverage.machine_coverage:.2f}, "
+            f"jobs={coverage.job_coverage:.2f}"
+        )
+
+        # ========== Enforce 100% coverage ==========
+        if coverage.machine_coverage < 1.0 or coverage.job_coverage < 1.0:
+            raise ExtractionError(
+                code="COVERAGE_MISMATCH",
+                message=f"coverage mismatch: missing machines {sorted(coverage.missing_machines)}, "
+                        f"missing jobs {sorted(coverage.missing_jobs)}",
+                details={
+                    "missing_machines": sorted(coverage.missing_machines),
+                    "missing_jobs": sorted(coverage.missing_jobs),
+                    "machine_coverage": coverage.machine_coverage,
+                    "job_coverage": coverage.job_coverage,
+                },
+            )
+
+        logger.info(f"OnboardingAgent.run: success - {len(factory.machines)} machines, {len(factory.jobs)} jobs")
+        return factory
 
     def _build_prompt(self, factory_text: str) -> str:
         """
-        Build a robust, comprehensive prompt for the LLM to produce stable FactoryConfig objects.
+        Build a simplified, focused prompt for LLM parsing of factory descriptions.
 
-        Structure:
-        1. Role and guardrails
-        2. Hard schema definition with field descriptions
-        3. Comprehensive time/duration interpretation rules with examples
-        4. Size limits and demo constraints
-        5. Inference envelope (allowed vs forbidden)
-        6. ID generation rules for consistency
-        7. Step ordering and sequencing rules
-        8. Four worked examples (clean, messy, contradiction, forbidden features)
-        9. Explicit output rules and validation
-        10. Final constraint summary
+        This prompt prioritizes:
+        1. Clear extraction rules (COVERAGE FIRST)
+        2. Fractional duration handling (round, never drop)
+        3. A concrete worked example at the END (recency bias)
+        4. Minimal verbosity to avoid confusion
 
         Args:
             factory_text: Free-form factory description from user
@@ -121,409 +205,554 @@ class OnboardingAgent:
         Returns:
             Full prompt ready for LLM
         """
-        prompt = """You are a factory description parser. Your job is to interpret free-text descriptions
-of factories and extract a structured FactoryConfig.
-
-You will output ONLY valid JSON. No markdown, no prose, no explanation, no comments.
-
-================================================================================
-# ROLE & GUARDRAILS
-================================================================================
-
-You are conservative and deterministic. When uncertain, you:
-1. Pick the simplest interpretation that fits the schema
-2. Use defaults rather than guess missing values
-3. Drop incomplete or ambiguous constructs
-4. Prefer under-modeling to over-modeling
+        prompt = """You are a deterministic factory description parser. Output ONLY valid JSON.
+Your role: Extract structured factory configuration from free-form text.
+Your responsibility: Preserve all mentioned entities; never invent or drop.
 
 ================================================================================
-# SCHEMA DEFINITION (Required Output Structure)
+YOUR ROLE & CONSTRAINTS
 ================================================================================
 
-You MUST output this exact structure:
+You are NOT: Writing a simulation, optimizing, making business decisions, inferring missing data.
+You ARE: Deterministically parsing explicit mentions into a structured format.
 
-{
-  "machines": [
-    {
-      "id": "string (e.g., 'M1', 'M2', or descriptive: 'M_ASSEMBLY', 'M_DRILL')",
-      "name": "string (human-readable name from text)"
-    }
-  ],
-  "jobs": [
-    {
-      "id": "string (e.g., 'J1', 'J2', or descriptive: 'J_WIDGET_A')",
-      "name": "string (human-readable name from text)",
-      "steps": [
-        {
-          "machine_id": "string (MUST match some machine.id exactly)",
-          "duration_hours": "integer >= 1 (hours)"
-        }
-      ],
-      "due_time_hour": "integer (hour 0-24, or slightly beyond if explicit)"
-    }
-  ]
-}
-
-Notes on schema:
-- machines.id: Must be unique. Use M1, M2, M3... or descriptive IDs like M_ASSEMBLY.
-- machines.name: Human-readable name from the text.
-- jobs.id: Must be unique. Use J1, J2, J3... or descriptive IDs like J_WIDGET_A.
-- jobs.name: Human-readable name from the text.
-- steps: Ordered list. Each step references a machine.id that exists.
-- duration_hours: Must be >= 1 (integer). Never 0 or negative.
-- due_time_hour: Integer representing hour of day. 24 = end of day. Default = 24.
+PRINCIPLE: Trust the explicit text over inferred patterns.
+GOAL: Extract all mentioned machines, jobs, and steps exactly as stated.
 
 ================================================================================
-# TIME INTERPRETATION RULES (MANDATORY - Apply Deterministically)
+EXTRACTION RULES (Priority Order)
 ================================================================================
 
-When you see time expressions, apply these rules EXACTLY:
+1. COVERAGE FIRST: Extract ALL explicitly mentioned machines and jobs.
+   - If text says "M1, M2, M3", include all three.
+   - If text names "J1, J2, J3, J4", include all four.
+   - NEVER drop a job or machine mentioned anywhere.
+   - Context: This rule prevents silent data loss.
 
-### DUE TIMES (must be integers)
-"by 10am" or "10am" or "due 10am"              → 10
-"by noon" or "noon" or "12pm" or "midday"      → 12
-"by 3pm" or "3pm"                              → 15
-"by 4:30pm" or "4:30pm"                        → 4 (round down, conservative)
-"end of day" or "EOD" or "close" or "by close" → 24
-"by tomorrow" or "next day"                    → Ignore (multi-day forbidden; use 24)
-"ASAP" or "urgent" with no time                → 24 (unless explicitly earlier time given)
-Missing due time (no deadline mentioned)       → 24 (default: end of day)
-Negative due time (e.g., "-5")                 → 0 or 24 (per context; default 24)
-"by 30 hours"                                  → 30 (if hours are explicit, use as-is)
+2. TRUST EXPLICIT STEPS OVER PATTERNS: When explicit steps contradict a pattern statement.
+   - If job steps are explicitly listed (e.g., "J1: M1→M2→M4"), use exactly those.
+   - Ignore uniform pattern statements (e.g., "pass through in sequence") if explicit steps contradict.
+   - Extract all machines from both the machine declaration AND from job steps.
+   - Never drop a machine just because it wasn't used in a job.
+   - Context: Machines may be used by only some jobs. That's OK.
 
-### DURATIONS (must be integers >= 1)
-"5 hours" or "5h" or "5 hrs"           → 5
-"about 3 hours" or "~3h" or "roughly 3" → 3 (round down; conservative)
-"3-4 hours" or "3 to 4 hours" or "3–4h" → 3 (take lower bound; conservative)
-"quick" or "fast" or "short"           → 1 (minimum viable duration)
-"lengthy" or "long" or "slow"          → 3 (context-dependent; infer conservatively)
-"a couple hours"                       → 2
-"half hour" or "0.5h"                  → 1 (round up; no sub-hour durations)
-Missing duration                       → 1 (default: minimum viable)
-Zero or negative duration              → 1 (clamp upward)
+3. FRACTIONAL DURATIONS: Always round, never drop.
+   - 1.5h → 2, 0.5h → 1, 2.25h → 2, 3.7h → 4
+   - Output MUST be integer >= 1
+   - Never drop a job because its duration is fractional.
+   - Rounding: Use standard rounding (0.5 rounds up).
+   - Context: The simulation engine requires integer hours.
 
-RULE: Always round durations DOWN or UP to integers >= 1. Never output 0 or fractional durations.
-
-================================================================================
-# SIZE LIMITS (Demo Constraints)
-================================================================================
-
-Enforce these hard caps:
-- Machines: 1-10 maximum (typical: 3-5)
-- Jobs: 1-15 maximum (typical: 3-5)
-- Steps per job: 1-8 maximum (typical: 2-4)
-- Duration per step: 1-24 hours (typical: 1-6)
-- Due time: 1-30 hours (typical: 8-24)
-
-If the description implies more machines or jobs, IGNORE the excess and model only
-the first 10 machines and first 15 jobs mentioned. Prioritize clarity and consistency.
+4. FILL GAPS: Use defaults when underspecified.
+   - Missing duration → 1 hour
+   - Missing due time → 24 (end of day)
+   - Missing machine in step → drop that step only, keep job
+   - Context: Defaults are safe fallbacks, not inferences.
 
 ================================================================================
-# INFERENCE ENVELOPE (Allowed vs Forbidden)
+CONFLICT RESOLUTION HIERARCHY (When Text Contradicts Itself)
 ================================================================================
 
-### ALLOWED (infer freely within these bounds)
-✓ Infer machine IDs from names (e.g., "Assembly line" → M1 or M_ASSEMBLY)
-✓ Infer job IDs from names or references (e.g., "Widget A" → J1 or J_WIDGET_A)
-✓ Infer step durations using the rules above (missing → default 1)
-✓ Infer due times using the rules above (missing → default 24)
-✓ Infer job routing (step sequence) from text order
-✓ Map the same machine name to the same ID consistently
-✓ Fill missing fields with defaults
-✓ Interpret vague durations conservatively (e.g., "quick" → 1)
+When the input contains contradictory or ambiguous information, apply these rules
+in order of priority. Each rule overrides lower-priority rules.
 
-### FORBIDDEN (DO NOT infer; ignore these constructs completely)
-✗ Parallel steps or branching within a job (e.g., "then do A or B")
-✗ Multi-day schedules or rolling horizons (e.g., "Monday, then Tuesday")
-✗ Quantities, batch sizes, material flow (e.g., "100 units")
-✗ Costs, labor, resource pools (e.g., "2 operators")
-✗ Setup times or machine reconfiguration (e.g., "30min setup")
-✗ Machine parallelism or duplicate instances (e.g., "two Drill machines")
-✗ Job dependencies beyond sequential steps (e.g., "Job B starts after Job A ends")
-✗ External constraints (e.g., "power cuts at 6pm")
-✗ Batching, queueing, or variability (e.g., "batch sizes vary")
+1. EXPLICIT STEPS BEAT NARRATIVE PATTERNS
+   - If a job explicitly lists machines with durations (e.g., "J1: 2h on M1, 3h on M2, 1h on M4"),
+     use exactly those machines and durations in the output.
+   - Ignore any narrative description that contradicts the explicit steps
+     (e.g., "jobs pass through those machines in sequence").
+   - Context: Explicit data in job descriptions is more reliable than inferred patterns.
 
-If the text contains forbidden constructs, IGNORE them completely. Model only what fits.
+2. DECLARED MACHINES BEAT INFERRED MACHINES
+   - If text declares a list of machines (e.g., "We run 4 machines: M1, M2, M3, M4"),
+     include all four machines in the output.
+   - Even if only some jobs reference all of them.
+   - Never drop a machine just because not all jobs use it.
+   - Context: A machine can be declared but used by only a subset of jobs.
+
+3. EXPLICIT DURATIONS BEAT AMBIGUOUS LANGUAGE
+   - If a duration is stated explicitly (e.g., "2h"), use it exactly.
+   - If a duration is ambiguous (e.g., "2-3 hours"), use the lower bound (2).
+   - If a duration is vague (e.g., "quick"), use the default (1 hour).
+
+4. USE DEFAULTS FOR MISSING VALUES
+   - Missing duration → 1 hour
+   - Missing due time → 24 (end of day)
+   - But NEVER use a default that drops information.
+   - Context: Defaults preserve entities; silence does not.
+
+5. PRESERVE ALL MENTIONED ENTITIES
+   - Never drop a machine because it's declared but not used by all jobs.
+   - Never drop a job because it has fewer steps than other jobs.
+   - Never drop a step because its duration is fractional (round instead).
+   - Context: Data loss is worse than ambiguity.
+
+EXAMPLE OF CONFLICT RESOLUTION:
+Input: "Jobs pass through M1, M2, M3 in sequence. J1 uses M1, M2, M4."
+→ Rule 1 applies: J1 explicitly uses M1, M2, M4 (not M3).
+→ Rule 2 applies: M4 is declared in job steps, so include it in machines list.
+→ Output: J1 with steps [M1, M2, M4], all machines [M1, M2, M3, M4].
 
 ================================================================================
-# ID GENERATION RULES
+MACHINE & JOB ID EXTRACTION
 ================================================================================
 
 Machine IDs:
-- Prefer simple numeric IDs: M1, M2, M3, ... (simplest, clearest)
-- OR descriptive: M_ASSEMBLY, M_DRILL, M_PACK (if text strongly supports)
-- MUST be unique per factory
-- DO NOT invent machine IDs not grounded in the text
+- Format: "M" (uppercase) followed by digits/letters. Examples: M1, M2, M_ASSEMBLY, M01
+- Extract from: Both machine declarations AND job step descriptions
+- Preserve: Exact casing (M1 ≠ m1)
+- Never invent: Only extract what's explicitly mentioned
 
 Job IDs:
-- Prefer simple numeric IDs: J1, J2, J3, ... (simplest, clearest)
-- OR descriptive: J_WIDGET_A, J_GADGET_B (if text strongly supports)
-- MUST be unique per factory
-- DO NOT invent job IDs not grounded in the text
+- Format: "J" (uppercase) followed by digits/letters. Examples: J1, J2, J_WIDGET_A
+- Extract from: Job name/description lines
+- Preserve: Exact casing (J1 ≠ j1)
+- Never invent: Only extract what's explicitly mentioned
 
-Consistency: If you assign M1 to "Assembly" the first time, use M1 for Assembly every time.
-Same for jobs. Map names → IDs deterministically.
-
-================================================================================
-# STEP ORDERING & SEQUENCING RULES
-================================================================================
-
-1. Steps are ordered (first step listed is first to execute).
-2. No branching. No "Job A can do Step 1 OR Step 2". Always pick ONE sequence.
-3. No parallel steps. "Assembly → Drill AND Pack" is forbidden. Use "Assembly → Drill → Pack".
-4. No job dependencies. Each job's steps are independent of other jobs.
-5. All step.machine_id values MUST reference existing machines.
-6. Drop incomplete steps (machine_id not found) entirely; warn user.
-7. Never reorder steps unless the text explicitly shows the order.
+Machine Names & Job Names:
+- Extract: Text immediately following or describing the ID
+- Examples: "M1 (assembly)" → name="assembly" | "J1 widget" → name="widget"
+- Fallback: If no name given, use the ID itself (e.g., "M1" → name="M1")
+- Keep concise: Extract from text, don't paraphrase
 
 ================================================================================
-# EXAMPLE A: Clean Factory Description
+SCHEMA
 ================================================================================
 
-Input:
-"We operate 3 machines: Assembly (A), Drill (D), and Pack (P).
-Two jobs: Widget-A requires A(2h) → D(3h) → P(1h), due by noon.
-Gadget-B requires A(1h) → D(2h), due at 3pm."
-
-Output:
 {
   "machines": [
-    {"id": "M1", "name": "Assembly"},
-    {"id": "M2", "name": "Drill"},
-    {"id": "M3", "name": "Pack"}
+    {"id": "M1", "name": "string from text"}
   ],
   "jobs": [
     {
       "id": "J1",
-      "name": "Widget-A",
+      "name": "string from text",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 2}
+      ],
+      "due_time_hour": 24
+    }
+  ]
+}
+
+================================================================================
+TIME INTERPRETATION (when needed)
+================================================================================
+
+Due times: "10am" → 10, "noon" → 12, "3pm" → 15, "EOD" → 24
+Durations: "5h" → 5, "3-4h" → 3, "quick" → 1, "lengthy" → 3
+
+================================================================================
+FINAL WORKED EXAMPLE (Read This Carefully!)
+================================================================================
+
+INPUT TEXT:
+We run 3 machines (M1 assembly, M2 drill, M3 pack).
+Jobs J1, J2, J3, J4 each pass through those machines in sequence.
+J1 takes 2h on M1, 3h on M2, 1h on M3 (total 6h).
+J2 takes 1.5h on M1, 2h on M2, 1.5h on M3 (total 5h).
+J3 takes 3h on M1, 1h on M2, 2h on M3 (total 6h).
+J4 takes 2h on M1, 2h on M2, 4h on M3 (total 8h).
+
+YOUR OUTPUT MUST BE:
+{
+  "machines": [
+    {"id": "M1", "name": "assembly"},
+    {"id": "M2", "name": "drill"},
+    {"id": "M3", "name": "pack"}
+  ],
+  "jobs": [
+    {
+      "id": "J1",
+      "name": "Job 1",
       "steps": [
         {"machine_id": "M1", "duration_hours": 2},
         {"machine_id": "M2", "duration_hours": 3},
         {"machine_id": "M3", "duration_hours": 1}
       ],
-      "due_time_hour": 12
+      "due_time_hour": 24
     },
     {
       "id": "J2",
-      "name": "Gadget-B",
+      "name": "Job 2",
       "steps": [
-        {"machine_id": "M1", "duration_hours": 1},
-        {"machine_id": "M2", "duration_hours": 2}
-      ],
-      "due_time_hour": 15
-    }
-  ]
-}
-
-Why this works:
-- All machine names and job names extracted cleanly.
-- All durations explicit and integer.
-- All due times interpreted from clock times.
-- Schema compliance.
-
-================================================================================
-# EXAMPLE B: Messy SOP (Standard Operating Procedure)
-================================================================================
-
-Input:
-"SOP v3.2 (outdated): We have Assem (old ~1-2 hrs), Drill/Mill bottleneck (quick 2h or more like 4h, depends),
-Packing (fast or slow, 1-3h really). Three orders: Widget goes Assem→Drill→Pack by noon (approx).
-Gadget goes Assem→Drill by 2-3pm (or maybe 4). Part? Unknown route, maybe Drill→Pack, due EOD.
-Note: This procedure is from 2023, some machines offline next week (ignore this)."
-
-Output (conservative & deterministic):
-{
-  "machines": [
-    {"id": "M1", "name": "Assem"},
-    {"id": "M2", "name": "Drill/Mill"},
-    {"id": "M3", "name": "Packing"}
-  ],
-  "jobs": [
-    {
-      "id": "J1",
-      "name": "Widget",
-      "steps": [
-        {"machine_id": "M1", "duration_hours": 1},
+        {"machine_id": "M1", "duration_hours": 2},
         {"machine_id": "M2", "duration_hours": 2},
-        {"machine_id": "M3", "duration_hours": 1}
+        {"machine_id": "M3", "duration_hours": 2}
       ],
-      "due_time_hour": 12
-    },
-    {
-      "id": "J2",
-      "name": "Gadget",
-      "steps": [
-        {"machine_id": "M1", "duration_hours": 1},
-        {"machine_id": "M2", "duration_hours": 2}
-      ],
-      "due_time_hour": 14
+      "due_time_hour": 24
     },
     {
       "id": "J3",
-      "name": "Part",
+      "name": "Job 3",
       "steps": [
+        {"machine_id": "M1", "duration_hours": 3},
         {"machine_id": "M2", "duration_hours": 1},
-        {"machine_id": "M3", "duration_hours": 1}
+        {"machine_id": "M3", "duration_hours": 2}
+      ],
+      "due_time_hour": 24
+    },
+    {
+      "id": "J4",
+      "name": "Job 4",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 2},
+        {"machine_id": "M2", "duration_hours": 2},
+        {"machine_id": "M3", "duration_hours": 4}
       ],
       "due_time_hour": 24
     }
   ]
 }
 
-Why this is conservative:
-- "~1-2h" Assem → 1 (lower bound)
-- "2h or 4h" Drill → 2 (lower bound; conservative)
-- "fast or slow, 1-3h" Pack → 1 (lower bound)
-- "2-3pm or maybe 4" Gadget → 14 (lower bound; 2pm = 14)
-- "unknown route" Part → infer Drill→Pack (only path matching schema)
-- "machines offline next week" → ignored (multi-day forbidden)
-- All vague language resolved conservatively
+KEY POINTS SHOWN IN THIS EXAMPLE:
+- All 3 machines (M1, M2, M3) included (NEVER drop).
+- All 4 jobs (J1, J2, J3, J4) included (NEVER drop).
+- Fractional 1.5h rounded to 2 in J2 steps (NEVER drop due to fractional).
+- Default due_time 24 used (no due time given).
 
 ================================================================================
-# EXAMPLE C: Contradiction → Conservative Resolution
+SECOND WORKED EXAMPLE (Non-Uniform Job Paths)
 ================================================================================
 
-Input:
-"Machine Drill can process parts in 2 hours. But it's slow, takes 6 hours usually.
-Widget goes Assembly(quick) → Drill(fast) → Pack, due 'around noon, maybe 1pm'.
-Gadget goes Assembly → Drill, due 'definitely not past 10am, or maybe 2pm?'"
+INPUT TEXT:
+We run 4 machines (M1 assembly, M2 drill, M3 pack, M4 wrap).
+Jobs J1, J2, J3, J4 each pass through those machines.
+J1 takes 2h on M1, 3h on M2, 1h on M4 (total 6h).
+J2 takes 1.5h on M1, 2h on M2, 1.5h on M3 (total 5h).
+J3 takes 3h on M1, 1h on M2, 2h on M3 (total 6h).
+J4 takes 3h on M1, 2h on M2, 1h on M4 (total 6h).
 
-Output (picking simplest consistent interpretation):
+IMPORTANT: Notice that:
+- Statement says "pass through those machines" but explicit steps contradict this
+- J1 skips M3 and uses M4 instead
+- J4 also skips M3 and uses M4
+- J2 and J3 use M1, M2, M3 (don't use M4)
+- Trust the EXPLICIT STEPS, not the pattern statement
+
+YOUR OUTPUT MUST BE:
 {
   "machines": [
-    {"id": "M1", "name": "Assembly"},
-    {"id": "M2", "name": "Drill"},
-    {"id": "M3", "name": "Pack"}
+    {"id": "M1", "name": "assembly"},
+    {"id": "M2", "name": "drill"},
+    {"id": "M3", "name": "pack"},
+    {"id": "M4", "name": "wrap"}
   ],
   "jobs": [
     {
       "id": "J1",
-      "name": "Widget",
+      "name": "Job 1",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 2},
+        {"machine_id": "M2", "duration_hours": 3},
+        {"machine_id": "M4", "duration_hours": 1}
+      ],
+      "due_time_hour": 24
+    },
+    {
+      "id": "J2",
+      "name": "Job 2",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 2},
+        {"machine_id": "M2", "duration_hours": 2},
+        {"machine_id": "M3", "duration_hours": 2}
+      ],
+      "due_time_hour": 24
+    },
+    {
+      "id": "J3",
+      "name": "Job 3",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 3},
+        {"machine_id": "M2", "duration_hours": 1},
+        {"machine_id": "M3", "duration_hours": 2}
+      ],
+      "due_time_hour": 24
+    },
+    {
+      "id": "J4",
+      "name": "Job 4",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 3},
+        {"machine_id": "M2", "duration_hours": 2},
+        {"machine_id": "M4", "duration_hours": 1}
+      ],
+      "due_time_hour": 24
+    }
+  ]
+}
+
+KEY POINTS SHOWN IN THIS EXAMPLE:
+- All 4 machines (M1, M2, M3, M4) included, even though not all jobs use them (NEVER drop).
+- All 4 jobs (J1, J2, J3, J4) included (NEVER drop).
+- J1 and J4 skip M3 and use M4 instead (explicit steps override pattern).
+- J2 and J3 don't use M4 at all (jobs have different paths, that's OK).
+- Fractional 1.5h rounded to 2 in J2 (NEVER drop due to fractional).
+- M4 is preserved even though only 2 jobs use it.
+
+================================================================================
+THIRD WORKED EXAMPLE (Sparse Machine Usage)
+================================================================================
+
+INPUT TEXT:
+We have 4 machines: M1 (saw), M2 (drill), M3 (paint), M4 (wrap).
+J1 (assembly) uses M1 and M2 only: 2h on M1, 3h on M2.
+J2 (finishing) uses all four: 1h M1, 1h M2, 2h M3, 1h M4.
+
+Notice: M4 is only used by J1. M1, M3 are only used by one or two jobs.
+That's completely OK. Machines can be used by different subsets of jobs.
+
+YOUR OUTPUT MUST BE:
+{
+  "machines": [
+    {"id": "M1", "name": "saw"},
+    {"id": "M2", "name": "drill"},
+    {"id": "M3", "name": "paint"},
+    {"id": "M4", "name": "wrap"}
+  ],
+  "jobs": [
+    {
+      "id": "J1",
+      "name": "assembly",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 2},
+        {"machine_id": "M2", "duration_hours": 3}
+      ],
+      "due_time_hour": 24
+    },
+    {
+      "id": "J2",
+      "name": "finishing",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 1},
+        {"machine_id": "M2", "duration_hours": 1},
+        {"machine_id": "M3", "duration_hours": 2},
+        {"machine_id": "M4", "duration_hours": 1}
+      ],
+      "due_time_hour": 24
+    }
+  ]
+}
+
+KEY POINTS SHOWN IN THIS EXAMPLE:
+- All 4 machines preserved even though J1 only uses 2 of them (NEVER drop).
+- J1 has only 2 steps (doesn't use M3, M4), and that's OK.
+- J2 uses all 4 machines.
+- Different jobs can have different numbers of steps.
+
+================================================================================
+FOURTH WORKED EXAMPLE (Narrative Pattern Contradicted by Explicit Steps)
+================================================================================
+
+INPUT TEXT:
+We run 4 machines (M1 assembly, M2 drill, M3 pack, M4 wrap).
+Jobs J1, J2, J3 each pass through those machines in sequence.
+J1 takes 2h on M1, 3h on M2, 1h on M4 (total 6h).
+J2 takes 1h on M1, 2h on M2, 1h on M3 (total 4h).
+J3 takes 3h on M1, 1h on M2, 2h on M4 (total 6h).
+
+CRITICAL NOTICE:
+- Narrative says "pass through those machines in sequence" (implies uniform M1→M2→M3→M4)
+- But explicit steps CONTRADICT this:
+  - J1 skips M3, goes to M4 instead
+  - J2 uses M3, not M4
+  - J3 skips M3, goes to M4 instead
+- INSTRUCTION: Trust the explicit steps, NOT the narrative pattern.
+
+YOUR OUTPUT MUST BE:
+{
+  "machines": [
+    {"id": "M1", "name": "assembly"},
+    {"id": "M2", "name": "drill"},
+    {"id": "M3", "name": "pack"},
+    {"id": "M4", "name": "wrap"}
+  ],
+  "jobs": [
+    {
+      "id": "J1",
+      "name": "Job 1",
+      "steps": [
+        {"machine_id": "M1", "duration_hours": 2},
+        {"machine_id": "M2", "duration_hours": 3},
+        {"machine_id": "M4", "duration_hours": 1}
+      ],
+      "due_time_hour": 24
+    },
+    {
+      "id": "J2",
+      "name": "Job 2",
       "steps": [
         {"machine_id": "M1", "duration_hours": 1},
         {"machine_id": "M2", "duration_hours": 2},
         {"machine_id": "M3", "duration_hours": 1}
       ],
-      "due_time_hour": 12
-    },
-    {
-      "id": "J2",
-      "name": "Gadget",
-      "steps": [
-        {"machine_id": "M1", "duration_hours": 1},
-        {"machine_id": "M2", "duration_hours": 2}
-      ],
-      "due_time_hour": 10
-    }
-  ]
-}
-
-Resolution rules applied:
-- Drill duration: "2 hours" (explicit) is preferred over vague "usually 6h". Use 2.
-- "quick" Assembly → 1 (default for vague)
-- "fast" Drill → 1, but then we see "2 hours" → use 2 (explicit wins)
-- Widget due time: "around noon, maybe 1pm" → 12 (12pm/noon, lower bound)
-- Gadget due time: "definitely not past 10am" wins over "maybe 2pm" (explicit constraint → 10)
-- Pack duration: missing → 1 (default)
-
-================================================================================
-# EXAMPLE D: Forbidden Features → Ignore
-================================================================================
-
-Input:
-"We make Widgets in two parallel paths:
-Path A: Assembly (2h) → Drill (3h) → Pack (1h)
-Path B: Assembly (2h) → Hardening (2h) → Pack (1h)
-Gadgets go one of: Drill OR Hardening, then Pack (2h), due 4pm.
-We process batches of 10 units each. On Mondays we double-speed all machines.
-Setup times are typically 30min per job. Machine downtime is Wednesdays."
-
-Output (ignoring all forbidden constructs):
-{
-  "machines": [
-    {"id": "M1", "name": "Assembly"},
-    {"id": "M2", "name": "Drill"},
-    {"id": "M3", "name": "Pack"}
-  ],
-  "jobs": [
-    {
-      "id": "J1",
-      "name": "Widget",
-      "steps": [
-        {"machine_id": "M1", "duration_hours": 2},
-        {"machine_id": "M2", "duration_hours": 3},
-        {"machine_id": "M3", "duration_hours": 1}
-      ],
       "due_time_hour": 24
     },
     {
-      "id": "J2",
-      "name": "Gadget",
+      "id": "J3",
+      "name": "Job 3",
       "steps": [
+        {"machine_id": "M1", "duration_hours": 3},
         {"machine_id": "M2", "duration_hours": 1},
-        {"machine_id": "M3", "duration_hours": 2}
+        {"machine_id": "M4", "duration_hours": 2}
       ],
-      "due_time_hour": 16
+      "due_time_hour": 24
     }
   ]
 }
 
-Ignored constructs:
-- Parallel paths (Path A / Path B): Forbidden. Picked Path A (first mentioned).
-- Branching ("one of: Drill OR Hardening"): Forbidden. Picked Drill (first option).
-- "Hardening" machine: Not in Path A, so not included. (Path A has Assembly, Drill, Pack.)
-- Batch sizes (10 units): Forbidden. Ignored.
-- Multi-day rules ("Mondays", "double-speed", "Wednesdays"): Forbidden. Ignored.
-- Setup times (30min): Forbidden. Ignored.
-- "Gadget due 4pm": 16. Gadgets lack explicit due time in description, so 24 default used
-  (or if we extract "4pm" from context, that's 16).
-
-Key point: We modeled only what fits the sequential, deterministic schema.
+KEY POINTS SHOWN IN THIS EXAMPLE:
+- All 4 machines preserved even though jobs use them differently (NEVER drop).
+- All 3 jobs preserved even though they have different step counts (NEVER drop).
+- J1 and J3 skip M3 and use M4 instead (explicit steps override narrative).
+- J2 doesn't use M4 at all (jobs have different paths, that's OK).
+- Explicit "2h on M4" for J1, "2h on M4" for J3 are preserved exactly.
+- CRITICAL: This example shows the exact pattern from your issue.
 
 ================================================================================
-# HARD CONSTRAINTS (Final Checklist)
+FAILURE MODES (DO NOT DO THESE)
 ================================================================================
 
-Before outputting JSON, ensure:
+DON'T normalize inconsistent patterns:
+  BAD: Input says "J1→M2→M4, J2→M1→M2→M3" but you output "All jobs use M1→M2→M3"
+  GOOD: Output J1 with steps on M2, M4 and J2 with steps on M1, M2, M3
 
-1. All machines have unique IDs
-2. All jobs have unique IDs
-3. All job steps reference existing machine IDs
-4. No machines have duplicate names
-5. No jobs have duplicate names
-6. All durations are integers >= 1
-7. All due times are integers (typically 1-30)
-8. No branching in job steps (single linear sequence per job)
-9. No parallelism (no "and" in step routing; use →)
-10. No forbidden constructs (parallel ops, multi-day, batching, setup, resources, etc.)
-11. Machine count: 1-10
-12. Job count: 1-15
-13. Steps per job: 1-8
-14. JSON is valid and matches schema exactly
-15. If unclear, use defaults: duration=1, due_time=24
+DON'T infer or drop machines:
+  BAD: "M1, M2, M3" declared, but J1 mentions "M4" → you drop J1's M4 step
+  GOOD: Keep M4 if declared, or add M4 to machines if explicitly mentioned in steps
 
-If a constraint is violated, fix it by:
-- Dropping the offending job/step entirely
-- Filling missing values with defaults
-- Picking the simplest interpretation
+DON'T drop entities for being incomplete:
+  BAD: "J1 has no due time specified" → drop J1 entirely
+  GOOD: Assign default due_time (24) and keep J1
+
+DON'T reorder steps:
+  BAD: Input says "J1: M3 then M1 then M2" → you output steps in alphabetical order
+  GOOD: Preserve the order stated in the input
+
+DON'T combine entities:
+  BAD: Input mentions "J1" and "Job 1" → consolidate as one
+  GOOD: Treat as separate entities unless explicitly stated they're the same
+
+DON'T invent names or assumptions:
+  BAD: "M1 (no description)" → you output name="assembly" (guessing)
+  GOOD: Use name="M1" or only extract name from explicit text
+
+DON'T normalize based on narrative patterns:
+  BAD: Input says "jobs pass through machines in sequence" and you output all jobs
+       using the same machine sequence even though explicit steps show different paths.
+  GOOD: When explicit steps contradict narrative patterns, always trust the explicit steps.
+  EXAMPLE:
+    Input: "Jobs pass through M1, M2, M3 in sequence. J1 uses M1, M2, M4."
+    BAD OUTPUT: J1 with steps [M1, M2, M3]
+    GOOD OUTPUT: J1 with steps [M1, M2, M4]
 
 ================================================================================
-# OUTPUT INSTRUCTION
+MACHINE DECLARATION EXTRACTION (Critical First Step)
 ================================================================================
 
-Respond with ONLY the JSON object. No markdown, no backticks, no prose, no comments.
+Before parsing jobs, extract ALL declared machines explicitly. This prevents
+the common mistake of losing machines because they're not used by all jobs.
 
-Valid output example:
-{"machines": [...], "jobs": [...]}
+STEP 1: FIND MACHINE DECLARATIONS
+Look for patterns like:
+  - "We have N machines: M1, M2, M3, M4"
+  - "We run 4 machines (M1 assembly, M2 drill, M3 pack, M4 wrap)"
+  - "Machines: M1 (saw), M2 (drill), M3 (paint), M4 (wrap)"
 
-INVALID output examples (do NOT use these):
-- json\n{...}\n```
-- "// This is a comment" (no comments in JSON)
-- "machines": [...] // TODO (no comments)
-- Explanation before the JSON
-- Multiple JSON objects
+STEP 2: EXTRACT AND COUNT
+Extract EVERY machine ID mentioned in the machine declaration section.
+Count them. This count is your TARGET for the output machines list.
 
-Output raw, valid JSON only.
+STEP 3: VALIDATE COVERAGE
+After parsing all jobs:
+  - Count the machines in your output.
+  - If output count < declared count, you MISSED some machines (ERROR).
+  - Find which machines are missing and ADD them back.
+
+STEP 4: PRESERVE DURING JOB PARSING
+As you parse job steps, if a job references a machine not in your extracted
+machines list, ADD that machine to the list (don't drop the job step).
+
+EXAMPLE OF CORRECT EXTRACTION:
+Input text: "We run 4 machines (M1 assembly, M2 drill, M3 pack, M4 wrap)."
+Extraction: ["M1", "M2", "M3", "M4"] — exactly 4
+Output machines: MUST contain all 4 — even if only M1, M2, M3 are used by jobs
+                 (M4 may be declared but unused, that's OK)
+
+================================================================================
+PRE-OUTPUT VALIDATION CHECKLIST
+================================================================================
+
+Before you output your JSON, verify:
+
+□ MACHINES
+  - Every machine mentioned in the input is in the machines list
+  - Each machine has both id and name (never null)
+  - No duplicate machine IDs
+  - All machine IDs are referenced in at least one job step
+
+□ JOBS (CRITICAL: Count Validation)
+  - Count jobs mentioned in the input (e.g., "Jobs J1, J2, J3" = 3 jobs)
+  - Count jobs in your output
+  - MUST be equal. If output has fewer jobs, STOP and fix it.
+  - Every job mentioned in the input is in the jobs list
+  - Each job has id, name, steps array, and due_time_hour
+  - No duplicate job IDs
+  - due_time_hour is an integer 0-24
+  - VALIDATION: output_job_count == input_job_count (REQUIRED)
+
+□ STEPS
+  - Every step has machine_id and duration_hours
+  - Each machine_id references a machine in the machines list (no broken refs)
+  - Each duration_hours is an integer >= 1
+  - Steps appear in the order mentioned in the input
+
+□ COVERAGE
+  - If input declares "4 machines", output has 4 machines
+  - If input names "4 jobs", output has 4 jobs
+  - No entities were dropped unless explicitly allowed (e.g., invalid refs)
+
+□ INTERNAL CONSISTENCY
+  - All IDs in steps exist in machines/jobs lists
+  - No null or missing fields
+  - JSON is syntactically valid (all braces balanced, no trailing commas)
+
+If validation fails on any point, STOP and output an error JSON.
+
+================================================================================
+ERROR HANDLING
+================================================================================
+
+If you cannot produce valid output, return this error JSON:
+
+{
+  "error": "Cannot parse factory description",
+  "reason": "Specific explanation of what's ambiguous or missing",
+  "suggestions": "How to clarify the input"
+}
+
+Examples:
+
+{
+  "error": "Cannot parse factory description",
+  "reason": "No machines are mentioned in the text",
+  "suggestions": "Declare machines before listing jobs (e.g., 'We have 3 machines: M1, M2, M3')"
+}
+
+{
+  "error": "Cannot parse factory description",
+  "reason": "Job J1 references machines M1 and M2, but neither is declared in the machine list",
+  "suggestions": "Declare all machines before listing jobs, or reference only declared machines"
+}
+
+Common reasons for errors:
+- No machines mentioned
+- No jobs mentioned
+- A job references a machine that's never mentioned
+- Input is completely ambiguous (e.g., free prose with no structure)
+
+DO NOT: Return partial data or hallucinate missing entities.
+DO: Return a clear error explaining what's missing.
 
 ================================================================================
 # USER FACTORY DESCRIPTION
@@ -534,6 +763,9 @@ Output raw, valid JSON only.
 ================================================================================
 # OUTPUT (JSON ONLY)
 ================================================================================
+
+Important: Output ONLY the JSON object or error object. No explanation.
+Ensure the JSON is valid and passes all validation checks above.
 """
         return prompt
 
