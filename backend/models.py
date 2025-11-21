@@ -150,6 +150,8 @@ class SimulateResponse(BaseModel):
 
     This is the frozen contract for the simulate endpoint response shape.
     Future PRs may extend fields but must preserve these keys and their types.
+
+    PRF2: Added optional debug field for pipeline instrumentation data.
     """
 
     factory: FactoryConfig = Field(..., description="The onboarded and normalized factory configuration")
@@ -157,6 +159,9 @@ class SimulateResponse(BaseModel):
     metrics: list[ScenarioMetrics] = Field(..., description="Performance metrics for each scenario (same order as specs)")
     briefing: str = Field(..., description="Markdown briefing summarizing the scenarios and recommendations")
     meta: OnboardingMeta = Field(..., description="Metadata from the onboarding process")
+    debug: Optional["PipelineDebugPayload"] = Field(
+        default=None, description="Optional debug payload with pipeline stage execution records (PRF2)"
+    )
 
 
 class OnboardingRequest(BaseModel):
@@ -204,11 +209,17 @@ class PipelineRunResult:
     debug: "PipelineDebugPayload | None" = None
 
     def to_http_dict(self) -> dict:
-        """Convert to HTTP response dict (excludes debug)."""
-        return {
+        """Convert to HTTP response dict.
+
+        PRF2: Now includes debug payload if available.
+        """
+        result = {
             "factory": self.factory,
             "specs": self.specs,
             "metrics": self.metrics,
             "briefing": self.briefing,
             "meta": self.meta,
         }
+        if self.debug is not None:
+            result["debug"] = self.debug
+        return result

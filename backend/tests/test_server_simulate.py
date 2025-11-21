@@ -24,6 +24,13 @@ from backend.models import (
     OnboardingMeta,
     PipelineRunResult,
 )
+from backend.debug_types import (
+    PipelineDebugPayload,
+    PipelineStageRecord,
+    StageStatus,
+    StageKind,
+    DebugInputs,
+)
 
 
 @pytest.fixture
@@ -238,6 +245,171 @@ class TestSimulateEndpoint:
         data = response.json()
         assert data is not None
 
+    def test_simulate_endpoint_debug_present_when_available(self, client, monkeypatch):
+        """PRF2: Verify that debug payload is included in response when available."""
+        # Create a pipeline result with debug payload
+        factory = FactoryConfig(
+            machines=[Machine(id="M1", name="Assembly")],
+            jobs=[Job(
+                id="J1",
+                name="Job 1",
+                steps=[Step(machine_id="M1", duration_hours=2)],
+                due_time_hour=24,
+            )],
+        )
+
+        debug_payload = PipelineDebugPayload(
+            inputs=DebugInputs(
+                factory_text_chars=100,
+                factory_text_preview="test factory",
+                situation_text_chars=50,
+                situation_text_preview="test situation"
+            ),
+            overall_status="SUCCESS",
+            stages=[
+                PipelineStageRecord(
+                    id="O0",
+                    name="Extract Explicit IDs",
+                    kind=StageKind.ONBOARDING,
+                    status=StageStatus.SUCCESS,
+                    summary={"explicit_machine_ids": ["M1"], "explicit_job_ids": ["J1"]},
+                    errors=[],
+                ),
+                PipelineStageRecord(
+                    id="O1",
+                    name="Extract Coarse Structure",
+                    kind=StageKind.ONBOARDING,
+                    status=StageStatus.SUCCESS,
+                    summary={"machines": 1, "jobs": 1},
+                    errors=[],
+                ),
+            ],
+        )
+
+        pipeline_result = PipelineRunResult(
+            factory=factory,
+            specs=[ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+            metrics=[
+                ScenarioMetrics(
+                    makespan_hour=5,
+                    job_lateness={"J1": 0},
+                    bottleneck_machine_id="M1",
+                    bottleneck_utilization=0.5,
+                ),
+            ],
+            briefing="# Test Briefing",
+            meta=OnboardingMeta(
+                used_default_factory=False,
+                onboarding_errors=[],
+                inferred_assumptions=[],
+            ),
+            debug=debug_payload,
+        )
+
+        def mock_run_onboarded_pipeline(factory_text, situation_text):
+            return pipeline_result
+
+        monkeypatch.setattr(
+            "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
+        )
+
+        response = client.post(
+            "/api/simulate",
+            json={
+                "factory_description": "test factory",
+                "situation_text": "test situation",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify debug is in response
+        assert "debug" in data
+        assert data["debug"] is not None
+
+        # Verify debug structure
+        debug = data["debug"]
+        assert "inputs" in debug
+        assert "overall_status" in debug
+        assert "stages" in debug
+
+        # Verify overall_status
+        assert debug["overall_status"] == "SUCCESS"
+
+        # Verify stages array
+        assert isinstance(debug["stages"], list)
+        assert len(debug["stages"]) == 2
+
+        # Verify first stage structure
+        first_stage = debug["stages"][0]
+        assert first_stage["id"] == "O0"
+        assert first_stage["name"] == "Extract Explicit IDs"
+        assert first_stage["kind"] == "ONBOARDING"
+        assert first_stage["status"] == "SUCCESS"
+        assert "summary" in first_stage
+        assert "errors" in first_stage
+
+    def test_simulate_endpoint_debug_omitted_when_null(self, client, monkeypatch):
+        """PRF2: Verify that debug field is omitted when debug is None."""
+        factory = FactoryConfig(
+            machines=[Machine(id="M1", name="Assembly")],
+            jobs=[Job(
+                id="J1",
+                name="Job 1",
+                steps=[Step(machine_id="M1", duration_hours=2)],
+                due_time_hour=24,
+            )],
+        )
+
+        pipeline_result = PipelineRunResult(
+            factory=factory,
+            specs=[ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+            metrics=[
+                ScenarioMetrics(
+                    makespan_hour=5,
+                    job_lateness={"J1": 0},
+                    bottleneck_machine_id="M1",
+                    bottleneck_utilization=0.5,
+                ),
+            ],
+            briefing="# Test Briefing",
+            meta=OnboardingMeta(
+                used_default_factory=False,
+                onboarding_errors=[],
+                inferred_assumptions=[],
+            ),
+            debug=None,  # No debug payload
+        )
+
+        def mock_run_onboarded_pipeline(factory_text, situation_text):
+            return pipeline_result
+
+        monkeypatch.setattr(
+            "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
+        )
+
+        response = client.post(
+            "/api/simulate",
+            json={
+                "factory_description": "test factory",
+                "situation_text": "test situation",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify all other fields are still present
+        assert "factory" in data
+        assert "specs" in data
+        assert "metrics" in data
+        assert "briefing" in data
+        assert "meta" in data
+
+        # Verify debug is not in response when None
+        assert "debug" not in data
+
 
 class TestSimulateEndpointOnboardingIntegration:
     """Test that /api/simulate uses onboarding (not toy factory shortcut)."""
@@ -255,10 +427,10 @@ class TestSimulateEndpointOnboardingIntegration:
             )],
         )
 
-        custom_pipeline_result = {
-            "factory": custom_factory,
-            "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
-            "metrics": [
+        custom_pipeline_result = PipelineRunResult(
+            factory=custom_factory,
+            specs=[ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+            metrics=[
                 ScenarioMetrics(
                     makespan_hour=3,
                     job_lateness={"J_CUSTOM": 0},
@@ -266,12 +438,14 @@ class TestSimulateEndpointOnboardingIntegration:
                     bottleneck_utilization=0.5,
                 ),
             ],
-            "briefing": "# Custom Factory Briefing",
-            "meta": {
-                "used_default_factory": False,
-                "onboarding_errors": [],
-            },
-        }
+            briefing="# Custom Factory Briefing",
+            meta=OnboardingMeta(
+                used_default_factory=False,
+                onboarding_errors=[],
+                inferred_assumptions=[],
+            ),
+            debug=None,
+        )
 
         def mock_run_onboarded_pipeline(factory_text, situation_text):
             # Verify we're called with the right inputs
@@ -307,8 +481,8 @@ class TestSimulateEndpointOnboardingIntegration:
         def mock_run_onboarded_pipeline(factory_text, situation_text):
             nonlocal mock_onboarded_pipeline
             mock_onboarded_pipeline = (factory_text, situation_text)
-            return {
-                "factory": FactoryConfig(
+            return PipelineRunResult(
+                factory=FactoryConfig(
                     machines=[Machine(id="M1", name="M1")],
                     jobs=[Job(
                         id="J1",
@@ -317,8 +491,8 @@ class TestSimulateEndpointOnboardingIntegration:
                         due_time_hour=24
                     )],
                 ),
-                "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
-                "metrics": [
+                specs=[ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+                metrics=[
                     ScenarioMetrics(
                         makespan_hour=1,
                         job_lateness={"J1": 0},
@@ -326,12 +500,14 @@ class TestSimulateEndpointOnboardingIntegration:
                         bottleneck_utilization=0.5,
                     ),
                 ],
-                "briefing": "# Test",
-                "meta": {
-                    "used_default_factory": False,
-                    "onboarding_errors": [],
-                },
-            }
+                briefing="# Test",
+                meta=OnboardingMeta(
+                    used_default_factory=False,
+                    onboarding_errors=[],
+                    inferred_assumptions=[],
+                ),
+                debug=None,
+            )
 
         monkeypatch.setattr(
             "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
@@ -356,16 +532,15 @@ class TestSimulateEndpointOnboardingIntegration:
 
     def test_simulate_endpoint_fallback_sets_meta_correctly(self, client, monkeypatch):
         """Test that fallback factory sets used_default_factory in meta."""
-        from backend.models import OnboardingMeta
         from backend.world import build_toy_factory
 
         # Simulate a fallback to toy factory
         toy_factory = build_toy_factory()
 
-        fallback_result = {
-            "factory": toy_factory,
-            "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
-            "metrics": [
+        fallback_result = PipelineRunResult(
+            factory=toy_factory,
+            specs=[ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+            metrics=[
                 ScenarioMetrics(
                     makespan_hour=5,
                     job_lateness={"J1": 0, "J2": 0, "J3": 0},
@@ -373,13 +548,14 @@ class TestSimulateEndpointOnboardingIntegration:
                     bottleneck_utilization=0.7,
                 ),
             ],
-            "briefing": "# Fallback Briefing",
-            "meta": OnboardingMeta(
+            briefing="# Fallback Briefing",
+            meta=OnboardingMeta(
                 used_default_factory=True,
                 onboarding_errors=["Normalization resulted in empty factory; falling back to toy factory"],
                 inferred_assumptions=[],
             ),
-        }
+            debug=None,
+        )
 
         def mock_run_onboarded_pipeline(factory_text, situation_text):
             return fallback_result
@@ -410,8 +586,6 @@ class TestSimulateEndpointOnboardingIntegration:
 
     def test_simulate_endpoint_includes_meta_in_response(self, client, monkeypatch):
         """Test that /api/simulate response includes meta field."""
-        from backend.models import OnboardingMeta
-
         meta = OnboardingMeta(
             used_default_factory=False,
             onboarding_errors=["warning 1"],
@@ -419,8 +593,8 @@ class TestSimulateEndpointOnboardingIntegration:
         )
 
         def mock_run_onboarded_pipeline(factory_text, situation_text):
-            return {
-                "factory": FactoryConfig(
+            return PipelineRunResult(
+                factory=FactoryConfig(
                     machines=[Machine(id="M1", name="M1")],
                     jobs=[Job(
                         id="J1",
@@ -429,8 +603,8 @@ class TestSimulateEndpointOnboardingIntegration:
                         due_time_hour=24
                     )],
                 ),
-                "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
-                "metrics": [
+                specs=[ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+                metrics=[
                     ScenarioMetrics(
                         makespan_hour=1,
                         job_lateness={"J1": 0},
@@ -438,9 +612,10 @@ class TestSimulateEndpointOnboardingIntegration:
                         bottleneck_utilization=0.5,
                     ),
                 ],
-                "briefing": "# Test",
-                "meta": meta,
-            }
+                briefing="# Test",
+                meta=meta,
+                debug=None,
+            )
 
         monkeypatch.setattr(
             "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
@@ -470,8 +645,8 @@ class TestSimulateEndpointOnboardingIntegration:
         def mock_run_onboarded_pipeline(factory_text, situation_text):
             called_with.append((factory_text, situation_text))
             # Simulate custom onboarded factory
-            return {
-                "factory": FactoryConfig(
+            return PipelineRunResult(
+                factory=FactoryConfig(
                     machines=[Machine(id="M_ONBOARD", name="OnboardedMachine")],
                     jobs=[Job(
                         id="J_ONBOARD",
@@ -480,8 +655,8 @@ class TestSimulateEndpointOnboardingIntegration:
                         due_time_hour=18
                     )],
                 ),
-                "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
-                "metrics": [
+                specs=[ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+                metrics=[
                     ScenarioMetrics(
                         makespan_hour=2,
                         job_lateness={"J_ONBOARD": 0},
@@ -489,12 +664,14 @@ class TestSimulateEndpointOnboardingIntegration:
                         bottleneck_utilization=0.6,
                     ),
                 ],
-                "briefing": "# Onboarded Briefing",
-                "meta": {
-                    "used_default_factory": False,
-                    "onboarding_errors": [],
-                },
-            }
+                briefing="# Onboarded Briefing",
+                meta=OnboardingMeta(
+                    used_default_factory=False,
+                    onboarding_errors=[],
+                    inferred_assumptions=[],
+                ),
+                debug=None,
+            )
 
         monkeypatch.setattr(
             "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
@@ -538,23 +715,22 @@ class TestSimulateEndpointMetaPropagation:
         - Endpoint should propagate this in the response JSON
         - Frontend can then display a fallback warning banner
         """
-        from backend.models import OnboardingMeta
-
         def mock_run_onboarded_pipeline(factory_text, situation_text):
-            return {
-                "factory": FactoryConfig(
+            return PipelineRunResult(
+                factory=FactoryConfig(
                     machines=[Machine(id="M1", name="toy assembly")],
                     jobs=[Job(id="J1", name="toy job", steps=[Step(machine_id="M1", duration_hours=1)], due_time_hour=24)],
                 ),
-                "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
-                "metrics": [ScenarioMetrics(makespan_hour=5, job_lateness={"J1": 0}, bottleneck_machine_id="M1", bottleneck_utilization=0.5)],
-                "briefing": "# Briefing",
-                "meta": OnboardingMeta(
+                specs=[ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+                metrics=[ScenarioMetrics(makespan_hour=5, job_lateness={"J1": 0}, bottleneck_machine_id="M1", bottleneck_utilization=0.5)],
+                briefing="# Briefing",
+                meta=OnboardingMeta(
                     used_default_factory=True,
                     onboarding_errors=["coverage mismatch: missing machines"],
                     inferred_assumptions=[]
                 ),
-            }
+                debug=None,
+            )
 
         monkeypatch.setattr(
             "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
@@ -583,23 +759,22 @@ class TestSimulateEndpointMetaPropagation:
         - These errors should be visible in the response
         - Frontend can display them as warnings
         """
-        from backend.models import OnboardingMeta
-
         def mock_run_onboarded_pipeline(factory_text, situation_text):
-            return {
-                "factory": FactoryConfig(
+            return PipelineRunResult(
+                factory=FactoryConfig(
                     machines=[Machine(id="M1", name="toy")],
                     jobs=[Job(id="J1", name="toy", steps=[Step(machine_id="M1", duration_hours=1)], due_time_hour=24)],
                 ),
-                "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
-                "metrics": [ScenarioMetrics(makespan_hour=5, job_lateness={"J1": 0}, bottleneck_machine_id="M1", bottleneck_utilization=0.5)],
-                "briefing": "# Briefing",
-                "meta": OnboardingMeta(
+                specs=[ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+                metrics=[ScenarioMetrics(makespan_hour=5, job_lateness={"J1": 0}, bottleneck_machine_id="M1", bottleneck_utilization=0.5)],
+                briefing="# Briefing",
+                meta=OnboardingMeta(
                     used_default_factory=True,
                     onboarding_errors=["LLM timeout during coarse extraction", "Fell back to toy factory"],
                     inferred_assumptions=[]
                 ),
-            }
+                debug=None,
+            )
 
         monkeypatch.setattr(
             "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline
@@ -632,23 +807,22 @@ class TestSimulateEndpointMetaPropagation:
         - Meta should show used_default_factory=False
         - onboarding_errors should be empty
         """
-        from backend.models import OnboardingMeta
-
         def mock_run_onboarded_pipeline(factory_text, situation_text):
-            return {
-                "factory": FactoryConfig(
+            return PipelineRunResult(
+                factory=FactoryConfig(
                     machines=[Machine(id="M_CUSTOM", name="custom assembly")],
                     jobs=[Job(id="J_CUSTOM", name="custom job", steps=[Step(machine_id="M_CUSTOM", duration_hours=2)], due_time_hour=12)],
                 ),
-                "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
-                "metrics": [ScenarioMetrics(makespan_hour=5, job_lateness={"J_CUSTOM": 0}, bottleneck_machine_id="M_CUSTOM", bottleneck_utilization=0.8)],
-                "briefing": "# Briefing",
-                "meta": OnboardingMeta(
+                specs=[ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+                metrics=[ScenarioMetrics(makespan_hour=5, job_lateness={"J_CUSTOM": 0}, bottleneck_machine_id="M_CUSTOM", bottleneck_utilization=0.8)],
+                briefing="# Briefing",
+                meta=OnboardingMeta(
                     used_default_factory=False,
                     onboarding_errors=[],
                     inferred_assumptions=[]
                 ),
-            }
+                debug=None,
+            )
 
         monkeypatch.setattr(
             "backend.server.run_onboarded_pipeline", mock_run_onboarded_pipeline

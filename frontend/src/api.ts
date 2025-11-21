@@ -7,6 +7,8 @@
  * - backend/tests/test_api_contracts.py (update EXPECTED_*_KEYS)
  */
 
+import type { PipelineDebugPayload } from './types/pipeline';
+
 export interface Machine {
   id: string;
   name: string;
@@ -61,6 +63,7 @@ export interface SimulateResponse {
   metrics: ScenarioMetrics[];
   briefing: string;
   meta: OnboardingMeta;
+  debug?: PipelineDebugPayload | null; // PRF2: Optional debug payload with pipeline stage records
 }
 
 const DEFAULT_API_BASE_URL = 'http://localhost:8000';
