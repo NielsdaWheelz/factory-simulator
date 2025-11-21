@@ -21,6 +21,8 @@ from backend.models import (
     ScenarioSpec,
     ScenarioType,
     ScenarioMetrics,
+    OnboardingMeta,
+    PipelineRunResult,
 )
 
 
@@ -32,7 +34,7 @@ def client():
 
 @pytest.fixture
 def mock_pipeline_result():
-    """Return a realistic mock result from run_onboarded_pipeline."""
+    """Return a realistic mock result from run_onboarded_pipeline (PipelineRunResult)."""
     factory = FactoryConfig(
         machines=[
             Machine(id="M1", name="Assembly"),
@@ -69,17 +71,21 @@ def mock_pipeline_result():
         ),
     ]
 
-    return {
-        "factory": factory,
-        "situation_text": "normal day",
-        "specs": specs,
-        "metrics": metrics,
-        "briefing": "# Test Briefing\n\nThis is a test briefing.",
-        "meta": {
-            "used_default_factory": False,
-            "onboarding_errors": [],
-        },
-    }
+    meta = OnboardingMeta(
+        used_default_factory=False,
+        onboarding_errors=[],
+        inferred_assumptions=[],
+    )
+
+    # PRF1: run_onboarded_pipeline now returns PipelineRunResult
+    return PipelineRunResult(
+        factory=factory,
+        specs=specs,
+        metrics=metrics,
+        briefing="# Test Briefing\n\nThis is a test briefing.",
+        meta=meta,
+        debug=None,  # No debug exposure in tests
+    )
 
 
 class TestSimulateEndpoint:

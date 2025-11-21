@@ -1,6 +1,10 @@
 from enum import Enum
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from pydantic import BaseModel, Field, model_validator
+from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from .debug_types import PipelineDebugPayload
 
 
 class ScenarioType(str, Enum):
@@ -172,3 +176,39 @@ class OnboardingResponse(BaseModel):
 
     factory: FactoryConfig = Field(..., description="The onboarded and normalized factory configuration")
     meta: OnboardingMeta = Field(..., description="Metadata from the onboarding process")
+
+
+@dataclass
+class PipelineRunResult:
+    """
+    Internal result container for run_onboarded_pipeline with optional debug payload.
+
+    PRF1: This DTO extends the orchestrator's return value to include debug instrumentation
+    without changing the HTTP response shape. The debug field is stripped before serialization
+    to the client.
+
+    Fields:
+    - factory: FactoryConfig
+    - specs: list[ScenarioSpec]
+    - metrics: list[ScenarioMetrics]
+    - briefing: str
+    - meta: OnboardingMeta
+    - debug: PipelineDebugPayload | None (not exposed via HTTP in PRF1)
+    """
+
+    factory: FactoryConfig
+    specs: list[ScenarioSpec]
+    metrics: list[ScenarioMetrics]
+    briefing: str
+    meta: OnboardingMeta
+    debug: "PipelineDebugPayload | None" = None
+
+    def to_http_dict(self) -> dict:
+        """Convert to HTTP response dict (excludes debug)."""
+        return {
+            "factory": self.factory,
+            "specs": self.specs,
+            "metrics": self.metrics,
+            "briefing": self.briefing,
+            "meta": self.meta,
+        }
