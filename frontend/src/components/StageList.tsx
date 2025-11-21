@@ -3,6 +3,8 @@ import './StageList.css';
 
 export interface StageListProps {
   stages: PipelineStageRecord[];
+  selectedStageId: string | null;
+  onSelectStage: (id: string | null) => void;
 }
 
 function getStatusIcon(status: string): string {
@@ -71,7 +73,7 @@ function getStageSummaryText(stage: PipelineStageRecord): string {
   return 'no summary available';
 }
 
-export function StageList({ stages }: StageListProps) {
+export function StageList({ stages, selectedStageId, onSelectStage }: StageListProps) {
   if (!stages || stages.length === 0) {
     return (
       <div className="stage-list">
@@ -80,24 +82,49 @@ export function StageList({ stages }: StageListProps) {
     );
   }
 
+  const handleRowClick = (stageId: string) => {
+    if (selectedStageId === stageId) {
+      onSelectStage(null); // Toggle off if already selected
+    } else {
+      onSelectStage(stageId);
+    }
+  };
+
   return (
     <div className="stage-list">
       <div className="stages-container">
-        {stages.map((stage, idx) => (
-          <div key={idx} className="stage-row">
-            <span className={`stage-status-icon ${getStatusClass(stage.status)}`}>
-              {getStatusIcon(stage.status)}
-            </span>
-            <span className="stage-id">{stage.id}</span>
-            <span className="stage-name">{stage.name}</span>
-            <span className="stage-summary">{getStageSummaryText(stage)}</span>
-            {stage.errors && stage.errors.length > 0 && (
-              <span className="stage-errors" title={stage.errors.join(', ')}>
-                ({stage.errors.length} error{stage.errors.length !== 1 ? 's' : ''})
+        {stages.map((stage, idx) => {
+          const isSelected = selectedStageId === stage.id;
+          const rowClassName = `stage-row ${isSelected ? 'stage-row--selected' : ''}`;
+
+          return (
+            <div
+              key={idx}
+              className={rowClassName}
+              onClick={() => handleRowClick(stage.id)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleRowClick(stage.id);
+                }
+              }}
+            >
+              <span className={`stage-status-icon ${getStatusClass(stage.status)}`}>
+                {getStatusIcon(stage.status)}
               </span>
-            )}
-          </div>
-        ))}
+              <span className="stage-id">{stage.id}</span>
+              <span className="stage-name">{stage.name}</span>
+              <span className="stage-summary">{getStageSummaryText(stage)}</span>
+              {stage.errors && stage.errors.length > 0 && (
+                <span className="stage-errors" title={stage.errors.join(', ')}>
+                  ({stage.errors.length} error{stage.errors.length !== 1 ? 's' : ''})
+                </span>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
