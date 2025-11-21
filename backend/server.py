@@ -94,9 +94,11 @@ def simulate(req: SimulateRequest) -> dict:
     logger.info(f"   Scenarios: {len(result.specs)} generated")
     logger.info(f"   Metrics: {len(result.metrics)} computed")
     logger.info(f"   Briefing length: {len(result.briefing)} chars")
+    if result.debug is not None:
+        logger.info(f"   Debug payload: {len(result.debug.stages)} stages")
     logger.info("   Serializing response...")
 
-    # PRF1: Convert PipelineRunResult to HTTP dict (excluding debug payload)
+    # PRF2: Convert PipelineRunResult to HTTP dict (including debug payload if available)
     api_response = result.to_http_dict()
 
     # Ensure result is JSON serializable

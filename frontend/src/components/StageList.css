@@ -1,0 +1,87 @@
+.stage-list {
+  padding: 12px;
+  background-color: #f9f9f9;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  margin-top: 12px;
+}
+
+.stages-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stage-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  background-color: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+.stage-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.stage-status-icon.status-success {
+  background-color: #d4edda;
+  color: #155724;
+}
+
+.stage-status-icon.status-failed {
+  background-color: #f8d7da;
+  color: #721c24;
+}
+
+.stage-status-icon.status-skipped {
+  background-color: #e2e3e5;
+  color: #383d41;
+}
+
+.stage-id {
+  font-weight: 600;
+  min-width: 40px;
+  flex-shrink: 0;
+  color: #333;
+}
+
+.stage-name {
+  flex-shrink: 0;
+  color: #555;
+  font-weight: 500;
+}
+
+.stage-summary {
+  flex: 1;
+  color: #777;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage-errors {
+  flex-shrink: 0;
+  color: #d00;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.no-stages-message {
+  color: #666;
+  font-size: 13px;
+  margin: 0;
+  font-style: italic;
+  text-align: center;
+  padding: 20px;
+}

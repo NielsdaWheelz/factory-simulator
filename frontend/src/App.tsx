@@ -1,5 +1,8 @@
 import { useState } from 'react';
 import { simulate, type SimulateResponse } from './api';
+import type { PipelineDebugPayload } from './types/pipeline';
+import { PipelineSummary } from './components/PipelineSummary';
+import { StageList } from './components/StageList';
 import './App.css';
 
 const DEFAULT_FACTORY_DESCRIPTION = `We run 3 machines (M1 assembly, M2 drill, M3 pack).
@@ -16,15 +19,18 @@ function App() {
   const [factoryDescription, setFactoryDescription] = useState(DEFAULT_FACTORY_DESCRIPTION);
   const [situation, setSituation] = useState(DEFAULT_SITUATION);
   const [result, setResult] = useState<SimulateResponse | null>(null);
+  const [pipelineDebug, setPipelineDebug] = useState<PipelineDebugPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleSimulate = async () => {
     setLoading(true);
     setError(null);
+    setPipelineDebug(null);
     try {
       const response = await simulate(factoryDescription, situation);
       setResult(response);
+      setPipelineDebug(response.debug ?? null);
       console.log('Simulation complete:', response);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not reach simulation server';
@@ -93,6 +99,15 @@ function App() {
         {/* Output Panels */}
         {result && (
           <div className="output-panels">
+            {/* Pipeline Panel */}
+            <section className="panel pipeline-panel">
+              <h2>Pipeline Status</h2>
+              <PipelineSummary
+                debug={pipelineDebug}
+                usedDefaultFactory={result.meta?.used_default_factory ?? false}
+              />
+              {pipelineDebug && <StageList stages={pipelineDebug.stages} />}
+            </section>
             {/* Factory Panel */}
             <section className="panel factory-panel">
               <h2>Inferred Factory</h2>
