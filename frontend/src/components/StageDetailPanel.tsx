@@ -37,7 +37,7 @@ function renderSummaryContent(stage: PipelineStageRecord): JSX.Element {
   const stageType = summary.stage_type as string | undefined;
 
   if (!stageType) {
-    return <p className="summary-unavailable">Summary unavailable for this stage.</p>;
+    return <p className="summary-unavailable">summary unavailable for this stage type</p>;
   }
 
   switch (stageType) {
@@ -46,17 +46,17 @@ function renderSummaryContent(stage: PipelineStageRecord): JSX.Element {
       const jobIds = (summary.explicit_job_ids as string[]) || [];
       const total = (summary.total_ids_detected as number) || 0;
       return (
-        <div className="summary-fields">
-          <div className="summary-field">
-            <strong>Machines:</strong> {machineIds.length > 0 ? machineIds.join(', ') : 'none'}
+        <>
+          <div className="section-intro">detected explicit ids in the factory description text</div>
+          <div className="summary-subsection">
+            <h5>detected</h5>
+            <ul className="summary-list">
+              <li><strong>machines:</strong> {machineIds.length > 0 ? machineIds.join(', ') : 'none'}</li>
+              <li><strong>jobs:</strong> {jobIds.length > 0 ? jobIds.join(', ') : 'none'}</li>
+              <li><strong>total:</strong> {total}</li>
+            </ul>
           </div>
-          <div className="summary-field">
-            <strong>Jobs:</strong> {jobIds.length > 0 ? jobIds.join(', ') : 'none'}
-          </div>
-          <div className="summary-field">
-            <strong>Total IDs detected:</strong> {total}
-          </div>
-        </div>
+        </>
       );
     }
 
@@ -64,14 +64,16 @@ function renderSummaryContent(stage: PipelineStageRecord): JSX.Element {
       const machines = (summary.coarse_machine_count as number) || 0;
       const jobs = (summary.coarse_job_count as number) || 0;
       return (
-        <div className="summary-fields">
-          <div className="summary-field">
-            <strong>Coarse machine count:</strong> {machines}
+        <>
+          <div className="section-intro">extracted high-level entity counts</div>
+          <div className="summary-subsection">
+            <h5>extracted</h5>
+            <ul className="summary-list">
+              <li><strong>machines:</strong> {machines}</li>
+              <li><strong>jobs:</strong> {jobs}</li>
+            </ul>
           </div>
-          <div className="summary-field">
-            <strong>Coarse job count:</strong> {jobs}
-          </div>
-        </div>
+        </>
       );
     }
 
@@ -80,17 +82,17 @@ function renderSummaryContent(stage: PipelineStageRecord): JSX.Element {
       const jobsWithSteps = (summary.jobs_with_steps as number) || 0;
       const totalSteps = (summary.total_steps_extracted as number) || 0;
       return (
-        <div className="summary-fields">
-          <div className="summary-field">
-            <strong>Machines with steps:</strong> {machinesWithSteps}
+        <>
+          <div className="section-intro">parsed detailed job steps and routing</div>
+          <div className="summary-subsection">
+            <h5>extracted</h5>
+            <ul className="summary-list">
+              <li><strong>machines with steps:</strong> {machinesWithSteps}</li>
+              <li><strong>jobs with steps:</strong> {jobsWithSteps}</li>
+              <li><strong>total steps:</strong> {totalSteps}</li>
+            </ul>
           </div>
-          <div className="summary-field">
-            <strong>Jobs with steps:</strong> {jobsWithSteps}
-          </div>
-          <div className="summary-field">
-            <strong>Total steps extracted:</strong> {totalSteps}
-          </div>
-        </div>
+        </>
       );
     }
 
@@ -98,14 +100,16 @@ function renderSummaryContent(stage: PipelineStageRecord): JSX.Element {
       const machines = (summary.normalized_machines as number) || 0;
       const jobs = (summary.normalized_jobs as number) || 0;
       return (
-        <div className="summary-fields">
-          <div className="summary-field">
-            <strong>Normalized machines:</strong> {machines}
+        <>
+          <div className="section-intro">normalized and validated factory structure</div>
+          <div className="summary-subsection">
+            <h5>output</h5>
+            <ul className="summary-list">
+              <li><strong>machines:</strong> {machines}</li>
+              <li><strong>jobs:</strong> {jobs}</li>
+            </ul>
           </div>
-          <div className="summary-field">
-            <strong>Normalized jobs:</strong> {jobs}
-          </div>
-        </div>
+        </>
       );
     }
 
@@ -121,39 +125,54 @@ function renderSummaryContent(stage: PipelineStageRecord): JSX.Element {
       const is100 = summary.is_100_percent_coverage as boolean;
 
       return (
-        <div className="summary-fields">
-          <div className="summary-field">
-            <strong>Detected machines:</strong> {detectedMachines.length > 0 ? detectedMachines.join(', ') : 'none'}
+        <>
+          <div className="section-intro">verified that parsed entities cover detected ids</div>
+          
+          <div className="summary-subsection">
+            <h5>detected ids</h5>
+            <ul className="summary-list">
+              <li><strong>machines:</strong> {detectedMachines.length > 0 ? detectedMachines.join(', ') : 'none'}</li>
+              <li><strong>jobs:</strong> {detectedJobs.length > 0 ? detectedJobs.join(', ') : 'none'}</li>
+            </ul>
           </div>
-          <div className="summary-field">
-            <strong>Detected jobs:</strong> {detectedJobs.length > 0 ? detectedJobs.join(', ') : 'none'}
+
+          <div className="summary-subsection">
+            <h5>parsed entities</h5>
+            <ul className="summary-list">
+              <li><strong>machines:</strong> {parsedMachines.length > 0 ? parsedMachines.join(', ') : 'none'}</li>
+              <li><strong>jobs:</strong> {parsedJobs.length > 0 ? parsedJobs.join(', ') : 'none'}</li>
+            </ul>
           </div>
-          <div className="summary-field">
-            <strong>Parsed machines:</strong> {parsedMachines.length > 0 ? parsedMachines.join(', ') : 'none'}
+
+          <div className="summary-subsection">
+            <h5>coverage</h5>
+            <ul className="summary-list">
+              <li><strong>machines:</strong> {(machineCoverage * 100).toFixed(0)}%</li>
+              <li><strong>jobs:</strong> {(jobCoverage * 100).toFixed(0)}%</li>
+              <li><strong>100% coverage:</strong> {is100 ? 'yes' : 'no'}</li>
+            </ul>
           </div>
-          <div className="summary-field">
-            <strong>Parsed jobs:</strong> {parsedJobs.length > 0 ? parsedJobs.join(', ') : 'none'}
-          </div>
-          <div className="summary-field">
-            <strong>Machine coverage:</strong> {(machineCoverage * 100).toFixed(0)}%
-          </div>
-          <div className="summary-field">
-            <strong>Job coverage:</strong> {(jobCoverage * 100).toFixed(0)}%
-          </div>
-          {missingMachines.length > 0 && (
-            <div className="summary-field">
-              <strong>Missing machines:</strong> {missingMachines.join(', ')}
+
+          {(missingMachines.length > 0 || missingJobs.length > 0) && (
+            <div className="summary-subsection summary-subsection--warning">
+              <h5>missing</h5>
+              <ul className="summary-list">
+                {missingMachines.length > 0 && (
+                  <li><strong>machines:</strong> {missingMachines.join(', ')}</li>
+                )}
+                {missingJobs.length > 0 && (
+                  <li><strong>jobs:</strong> {missingJobs.join(', ')}</li>
+                )}
+              </ul>
             </div>
           )}
-          {missingJobs.length > 0 && (
-            <div className="summary-field">
-              <strong>Missing jobs:</strong> {missingJobs.join(', ')}
+
+          {stage.status === 'FAILED' && (
+            <div className="action-taken">
+              <strong>action taken:</strong> system fell back to demo factory; decision pipeline ran using fallback config.
             </div>
           )}
-          <div className="summary-field">
-            <strong>100% coverage:</strong> {is100 ? 'yes' : 'no'}
-          </div>
-        </div>
+        </>
       );
     }
 
@@ -161,14 +180,16 @@ function renderSummaryContent(stage: PipelineStageRecord): JSX.Element {
       const intent = (summary.intent_scenario_type as string) || 'unknown';
       const contextAvailable = summary.intent_context_available as boolean;
       return (
-        <div className="summary-fields">
-          <div className="summary-field">
-            <strong>Intent scenario type:</strong> {intent}
+        <>
+          <div className="section-intro">classified user intent from situation text</div>
+          <div className="summary-subsection">
+            <h5>result</h5>
+            <ul className="summary-list">
+              <li><strong>intent:</strong> {intent}</li>
+              <li><strong>context available:</strong> {contextAvailable ? 'yes' : 'no'}</li>
+            </ul>
           </div>
-          <div className="summary-field">
-            <strong>Context available:</strong> {contextAvailable ? 'yes' : 'no'}
-          </div>
-        </div>
+        </>
       );
     }
 
@@ -176,14 +197,16 @@ function renderSummaryContent(stage: PipelineStageRecord): JSX.Element {
       const count = (summary.generated_scenario_count as number) || 0;
       const contextAvailable = summary.futures_context_available as boolean;
       return (
-        <div className="summary-fields">
-          <div className="summary-field">
-            <strong>Generated scenario count:</strong> {count}
+        <>
+          <div className="section-intro">expanded intent into concrete scenarios</div>
+          <div className="summary-subsection">
+            <h5>output</h5>
+            <ul className="summary-list">
+              <li><strong>scenarios generated:</strong> {count}</li>
+              <li><strong>context available:</strong> {contextAvailable ? 'yes' : 'no'}</li>
+            </ul>
           </div>
-          <div className="summary-field">
-            <strong>Context available:</strong> {contextAvailable ? 'yes' : 'no'}
-          </div>
-        </div>
+        </>
       );
     }
 
@@ -191,14 +214,16 @@ function renderSummaryContent(stage: PipelineStageRecord): JSX.Element {
       const count = (summary.scenarios_run as number) || 0;
       const allSucceeded = summary.all_succeeded as boolean;
       return (
-        <div className="summary-fields">
-          <div className="summary-field">
-            <strong>Scenarios run:</strong> {count}
+        <>
+          <div className="section-intro">ran discrete-event simulations for each scenario</div>
+          <div className="summary-subsection">
+            <h5>execution</h5>
+            <ul className="summary-list">
+              <li><strong>scenarios run:</strong> {count}</li>
+              <li><strong>all succeeded:</strong> {allSucceeded ? 'yes' : 'no'}</li>
+            </ul>
           </div>
-          <div className="summary-field">
-            <strong>All succeeded:</strong> {allSucceeded ? 'yes' : 'no'}
-          </div>
-        </div>
+        </>
       );
     }
 
@@ -206,14 +231,16 @@ function renderSummaryContent(stage: PipelineStageRecord): JSX.Element {
       const count = (summary.metrics_computed as number) || 0;
       const allSucceeded = summary.all_succeeded as boolean;
       return (
-        <div className="summary-fields">
-          <div className="summary-field">
-            <strong>Metrics computed:</strong> {count}
+        <>
+          <div className="section-intro">computed metrics from simulation results</div>
+          <div className="summary-subsection">
+            <h5>output</h5>
+            <ul className="summary-list">
+              <li><strong>metrics computed:</strong> {count}</li>
+              <li><strong>all succeeded:</strong> {allSucceeded ? 'yes' : 'no'}</li>
+            </ul>
           </div>
-          <div className="summary-field">
-            <strong>All succeeded:</strong> {allSucceeded ? 'yes' : 'no'}
-          </div>
-        </div>
+        </>
       );
     }
 
@@ -221,21 +248,23 @@ function renderSummaryContent(stage: PipelineStageRecord): JSX.Element {
       const length = (summary.briefing_length_chars as number) || 0;
       const hasContent = summary.briefing_has_content as boolean;
       return (
-        <div className="summary-fields">
-          <div className="summary-field">
-            <strong>Briefing length:</strong> {length} characters
+        <>
+          <div className="section-intro">generated decision briefing from metrics</div>
+          <div className="summary-subsection">
+            <h5>output</h5>
+            <ul className="summary-list">
+              <li><strong>length:</strong> {length} characters</li>
+              <li><strong>has content:</strong> {hasContent ? 'yes' : 'no'}</li>
+            </ul>
           </div>
-          <div className="summary-field">
-            <strong>Has content:</strong> {hasContent ? 'yes' : 'no'}
-          </div>
-        </div>
+        </>
       );
     }
 
     default:
       return (
         <p className="summary-unavailable">
-          Summary unavailable for stage type: {stageType}
+          summary unavailable for stage type: {stageType}
         </p>
       );
   }
@@ -243,6 +272,7 @@ function renderSummaryContent(stage: PipelineStageRecord): JSX.Element {
 
 export function StageDetailPanel({ stage, onClose }: StageDetailPanelProps) {
   const agentDisplay = stage.agent_model || 'deterministic';
+  const kindLabel = stage.kind.toLowerCase();
 
   return (
     <div className="stage-detail-panel">
@@ -253,18 +283,12 @@ export function StageDetailPanel({ stage, onClose }: StageDetailPanelProps) {
           </span>
           <div className="header-text">
             <h3 className="stage-title">
-              [{stage.id}] {stage.name}
+              [{getStatusIcon(stage.status)}] {stage.id}: {stage.name}
             </h3>
             <div className="stage-metadata">
-              <span className="metadata-item">
-                <strong>Status:</strong> {stage.status}
-              </span>
-              <span className="metadata-item">
-                <strong>Kind:</strong> {stage.kind}
-              </span>
-              <span className="metadata-item">
-                <strong>Agent:</strong> {agentDisplay}
-              </span>
+              <span className="metadata-badge">{kindLabel}</span>
+              <span className="metadata-separator">•</span>
+              <span className="metadata-agent">{agentDisplay}</span>
             </div>
           </div>
         </div>
@@ -276,14 +300,14 @@ export function StageDetailPanel({ stage, onClose }: StageDetailPanelProps) {
       <div className="stage-detail-content">
         {/* Summary Section */}
         <div className="stage-detail-section">
-          <h4>Summary</h4>
+          <h4>summary</h4>
           {renderSummaryContent(stage)}
         </div>
 
         {/* Errors Section */}
         {stage.errors && stage.errors.length > 0 && (
           <div className="stage-detail-section stage-detail-errors">
-            <h4>Errors ({stage.errors.length})</h4>
+            <h4>errors ({stage.errors.length})</h4>
             <ul className="errors-list">
               {stage.errors.map((error, idx) => (
                 <li key={idx}>{error}</li>
@@ -295,9 +319,9 @@ export function StageDetailPanel({ stage, onClose }: StageDetailPanelProps) {
         {/* Payload Preview Section */}
         {stage.payload_preview && (
           <div className="stage-detail-section stage-detail-payload">
-            <h4>Payload Preview</h4>
+            <h4>payload preview</h4>
             <div className="payload-meta">
-              <span>Type: <strong>{stage.payload_preview.type}</strong></span>
+              <span>type: <strong>{stage.payload_preview.type}</strong></span>
               {stage.payload_preview.truncated && (
                 <span className="truncated-badge">truncated</span>
               )}
