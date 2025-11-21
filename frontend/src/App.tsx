@@ -136,14 +136,14 @@ function App() {
               {result.meta?.used_default_factory && (
                 <div className="fallback-banner">
                   <div className="banner-header">
-                    <strong>⚠️ Using Demo Factory</strong>
+                    <strong>⚠️ using demo factory</strong>
                   </div>
                   <p className="banner-message">
-                    We couldn&apos;t parse your factory description. The system is using a built-in demo factory instead. Please review the factory below to ensure it matches your intent.
+                    we couldn&apos;t parse your factory description. the system is using a built-in demo factory instead. review the factory below to ensure it matches your intent.
                   </p>
                   {result.meta?.onboarding_errors && result.meta.onboarding_errors.length > 0 && (
                     <div className="errors-box">
-                      <strong>Issues encountered:</strong>
+                      <strong>issues encountered:</strong>
                       <ul className="errors-list">
                         {result.meta.onboarding_errors.map((error, idx) => (
                           <li key={idx}>{error}</li>
@@ -152,13 +152,18 @@ function App() {
                     </div>
                   )}
                   {pipelineDebug && (() => {
-                    const firstFailedStage = pipelineDebug.stages.find(s => s.status === 'FAILED');
+                    // prefer o4 (coverage assessment) if it failed, otherwise first failed onboarding stage
+                    const onboardingStages = pipelineDebug.stages.filter(s => s.kind === 'ONBOARDING');
+                    const failedOnboarding = onboardingStages.filter(s => s.status === 'FAILED');
+                    const coverageStage = failedOnboarding.find(s => s.id === 'o4');
+                    const firstFailedStage = coverageStage || failedOnboarding[0];
+                    
                     return firstFailedStage ? (
                       <button
                         className="view-details-button"
                         onClick={() => setExpandedStageId(firstFailedStage.id)}
                       >
-                        View Pipeline Details
+                        view pipeline details
                       </button>
                     ) : null;
                   })()}
