@@ -90,20 +90,14 @@ def simulate(req: SimulateRequest) -> dict:
 
     logger.info("=" * 80)
     logger.info("✅ Pipeline completed successfully")
-    logger.info(f"   Factory: {len(result['factory'].machines)} machines, {len(result['factory'].jobs)} jobs")
-    logger.info(f"   Scenarios: {len(result['specs'])} generated")
-    logger.info(f"   Metrics: {len(result['metrics'])} computed")
-    logger.info(f"   Briefing length: {len(result['briefing'])} chars")
+    logger.info(f"   Factory: {len(result.factory.machines)} machines, {len(result.factory.jobs)} jobs")
+    logger.info(f"   Scenarios: {len(result.specs)} generated")
+    logger.info(f"   Metrics: {len(result.metrics)} computed")
+    logger.info(f"   Briefing length: {len(result.briefing)} chars")
     logger.info("   Serializing response...")
 
-    # Filter result to only include API contract keys: factory, specs, metrics, briefing, meta
-    api_response = {
-        "factory": result["factory"],
-        "specs": result["specs"],
-        "metrics": result["metrics"],
-        "briefing": result["briefing"],
-        "meta": result["meta"],
-    }
+    # PRF1: Convert PipelineRunResult to HTTP dict (excluding debug payload)
+    api_response = result.to_http_dict()
 
     # Ensure result is JSON serializable
     serialized = serialize_simulation_result(api_response)
@@ -140,7 +134,7 @@ def onboard(req: OnboardingRequest) -> dict:
     logger.info("   Starting onboarding pipeline...")
     logger.info("=" * 80)
 
-    factory, meta = run_onboarding(req.factory_description)
+    factory, meta, _stages = run_onboarding(req.factory_description)
 
     response = OnboardingResponse(factory=factory, meta=meta)
 

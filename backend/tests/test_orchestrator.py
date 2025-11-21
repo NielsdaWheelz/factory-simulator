@@ -450,7 +450,7 @@ class TestRunOnboarding:
             )
             mock_agent.return_value = valid_factory
 
-            factory, meta = run_onboarding("custom factory")
+            factory, meta, _ = run_onboarding("custom factory")
 
             # Success: factory from agent is returned, no fallback
             assert factory == valid_factory
@@ -475,7 +475,7 @@ class TestRunOnboarding:
                 },
             )
 
-            factory, meta = run_onboarding("factory with M1, M2")
+            factory, meta, _ = run_onboarding("factory with M1, M2")
 
             # Fallback triggered
             toy_factory = build_toy_factory()
@@ -497,7 +497,7 @@ class TestRunOnboarding:
                 details={"stage": "coarse_extraction"},
             )
 
-            factory, meta = run_onboarding("factory text")
+            factory, meta, _ = run_onboarding("factory text")
 
             # Fallback triggered
             toy_factory = build_toy_factory()
@@ -507,7 +507,7 @@ class TestRunOnboarding:
             assert "LLM_FAILURE" in meta.onboarding_errors[0]
 
     def test_run_onboarding_returns_tuple(self):
-        """Test that run_onboarding returns (FactoryConfig, OnboardingMeta) tuple."""
+        """Test that run_onboarding returns (FactoryConfig, OnboardingMeta, stages) tuple."""
         with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent:
 
             valid_factory = build_toy_factory()
@@ -516,10 +516,11 @@ class TestRunOnboarding:
             result = run_onboarding("test")
 
             assert isinstance(result, tuple)
-            assert len(result) == 2
-            factory, meta = result
+            assert len(result) == 3  # PRF1: Now returns 3-tuple with stages
+            factory, meta, stages = result
             assert isinstance(factory, FactoryConfig)
             assert isinstance(meta, OnboardingMeta)
+            assert isinstance(stages, list)
 
 
 class TestRunOnboardingNegativeIntegration:
@@ -554,7 +555,7 @@ class TestRunOnboardingNegativeIntegration:
                 },
             )
 
-            factory, meta = run_onboarding("factory with M1, M2, M3 and J1, J2, J3 but LLM only found M1, M2")
+            factory, meta, _ = run_onboarding("factory with M1, M2, M3 and J1, J2, J3 but LLM only found M1, M2")
 
             # Verify fallback occurred
             toy_factory = build_toy_factory()
@@ -584,7 +585,7 @@ class TestRunOnboardingNegativeIntegration:
                 details={"lost_job_ids": ["J1"]},
             )
 
-            factory, meta = run_onboarding("factory description")
+            factory, meta, _ = run_onboarding("factory description")
 
             # Verify fallback
             toy_factory = build_toy_factory()
@@ -611,7 +612,7 @@ class TestRunOnboardingNegativeIntegration:
                 details={"stage": "coarse_extraction", "error_type": "TimeoutError"},
             )
 
-            factory, meta = run_onboarding("factory text")
+            factory, meta, _ = run_onboarding("factory text")
 
             toy_factory = build_toy_factory()
             assert factory == toy_factory
@@ -640,7 +641,7 @@ class TestRunOnboardingNegativeIntegration:
             )
             mock_agent.return_value = custom_factory
 
-            factory, meta = run_onboarding("custom factory description")
+            factory, meta, _ = run_onboarding("custom factory description")
 
             # Verify passthrough
             assert factory == custom_factory
@@ -692,14 +693,14 @@ class TestRunDecisionPipeline:
             mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "futures context")
             mock_briefing.return_value = "# Briefing"
 
-            result = run_decision_pipeline(factory, "test situation", meta)
+            result_dict, _ = run_decision_pipeline(factory, "test situation", meta)
 
-            assert isinstance(result, dict)
-            assert "factory" in result
-            assert "specs" in result
-            assert "metrics" in result
-            assert "briefing" in result
-            assert "meta" in result
+            assert isinstance(result_dict, dict)
+            assert "factory" in result_dict
+            assert "specs" in result_dict
+            assert "metrics" in result_dict
+            assert "briefing" in result_dict
+            assert "meta" in result_dict
 
     def test_run_decision_pipeline_threads_meta_through(self):
         """Test that input meta is returned unchanged."""
@@ -718,11 +719,11 @@ class TestRunDecisionPipeline:
             mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "context")
             mock_briefing.return_value = "# Briefing"
 
-            result = run_decision_pipeline(factory, "test", meta_in)
+            result_dict, _ = run_decision_pipeline(factory, "test", meta_in)
 
-            assert result["meta"] == meta_in
-            assert result["meta"].used_default_factory is True
-            assert result["meta"].onboarding_errors == ["test error"]
+            assert result_dict["meta"] == meta_in
+            assert result_dict["meta"].used_default_factory is True
+            assert result_dict["meta"].onboarding_errors == ["test error"]
 
     def test_run_decision_pipeline_returns_factory_input(self):
         """Test that returned factory is the input factory."""
@@ -737,9 +738,9 @@ class TestRunDecisionPipeline:
             mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "context")
             mock_briefing.return_value = "# Briefing"
 
-            result = run_decision_pipeline(factory, "test", meta)
+            result_dict, _ = run_decision_pipeline(factory, "test", meta)
 
-            assert result["factory"] is factory
+            assert result_dict["factory"] is factory
 
     def test_run_decision_pipeline_multiple_scenarios(self):
         """Test decision pipeline with multiple scenarios."""
@@ -761,11 +762,11 @@ class TestRunDecisionPipeline:
             mock_futures.return_value = (specs_list, "context")
             mock_briefing.return_value = "# Briefing"
 
-            result = run_decision_pipeline(factory, "test", meta)
+            result_dict, _ = run_decision_pipeline(factory, "test", meta)
 
-            assert len(result["specs"]) == 3
-            assert len(result["metrics"]) == 3
-            assert result["specs"] == specs_list
+            assert len(result_dict["specs"]) == 3
+            assert len(result_dict["metrics"]) == 3
+            assert result_dict["specs"] == specs_list
 
     def test_run_decision_pipeline_raises_on_empty_scenarios(self):
         """Test that decision pipeline raises if FuturesAgent returns empty list."""
@@ -800,10 +801,10 @@ class TestRunDecisionPipeline:
             mock_futures.return_value = (specs_list, "context")
             mock_briefing.return_value = "# Briefing"
 
-            result = run_decision_pipeline(factory, "test", meta)
+            result_dict, _ = run_decision_pipeline(factory, "test", meta)
 
-            assert len(result["specs"]) == 2
-            assert len(result["metrics"]) == 2
+            assert len(result_dict["specs"]) == 2
+            assert len(result_dict["metrics"]) == 2
 
     def test_run_decision_pipeline_passes_factory_to_agents(self):
         """Test that factory is passed to IntentAgent and FuturesAgent."""
@@ -818,7 +819,7 @@ class TestRunDecisionPipeline:
             mock_futures.return_value = ([ScenarioSpec(scenario_type=ScenarioType.BASELINE)], "context")
             mock_briefing.return_value = "# Briefing"
 
-            result = run_decision_pipeline(factory, "test situation", meta)
+            result_dict, _ = run_decision_pipeline(factory, "test situation", meta)
 
             # Check that IntentAgent was called with factory
             assert mock_intent.called
@@ -842,15 +843,20 @@ class TestRunOnboardedPipelineIntegration:
 
             factory = build_toy_factory()
             meta = OnboardingMeta(used_default_factory=False, onboarding_errors=[], inferred_assumptions=[])
-            mock_onboarding.return_value = (factory, meta)
+            # PRF1: run_onboarding now returns (factory, meta, stages)
+            mock_onboarding.return_value = (factory, meta, [])
 
-            mock_decision.return_value = {
-                "factory": factory,
-                "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
-                "metrics": [MagicMock()],
-                "briefing": "# Briefing",
-                "meta": meta,
-            }
+            # PRF1: run_decision_pipeline now returns (result_dict, stages)
+            mock_decision.return_value = (
+                {
+                    "factory": factory,
+                    "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+                    "metrics": [MagicMock()],
+                    "briefing": "# Briefing",
+                    "meta": meta,
+                },
+                []
+            )
 
             result = run_onboarded_pipeline("factory text", "situation text")
 
@@ -876,15 +882,20 @@ class TestRunOnboardedPipelineIntegration:
                 onboarding_errors=["error1"],
                 inferred_assumptions=[]
             )
-            mock_onboarding.return_value = (custom_factory, custom_meta)
+            # PRF1: run_onboarding now returns (factory, meta, stages)
+            mock_onboarding.return_value = (custom_factory, custom_meta, [])
 
-            mock_decision.return_value = {
-                "factory": custom_factory,
-                "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
-                "metrics": [MagicMock()],
-                "briefing": "# Briefing",
-                "meta": custom_meta,
-            }
+            # PRF1: run_decision_pipeline now returns (result_dict, stages)
+            mock_decision.return_value = (
+                {
+                    "factory": custom_factory,
+                    "specs": [ScenarioSpec(scenario_type=ScenarioType.BASELINE)],
+                    "metrics": [MagicMock()],
+                    "briefing": "# Briefing",
+                    "meta": custom_meta,
+                },
+                []
+            )
 
             result = run_onboarded_pipeline("factory text", "situation text")
 
@@ -894,8 +905,8 @@ class TestRunOnboardedPipelineIntegration:
             assert decision_call[0][2] == custom_meta
 
             # Verify result contains the custom factory and meta
-            assert result["factory"] == custom_factory
-            assert result["meta"] == custom_meta
+            assert result.factory == custom_factory
+            assert result.meta == custom_meta
 
     def test_run_onboarded_pipeline_returns_dict_with_all_keys(self):
         """Test that result has all required keys."""
@@ -909,6 +920,7 @@ class TestRunOnboardedPipelineIntegration:
 
             result = run_onboarded_pipeline("factory text", "situation text")
 
-            assert set(result.keys()) == {
+            http_result = result.to_http_dict()
+            assert set(http_result.keys()) == {
                 "factory", "specs", "metrics", "briefing", "meta"
             }
