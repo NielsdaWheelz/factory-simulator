@@ -24,7 +24,13 @@ from .sim import simulate
 from .metrics import compute_metrics
 from .agents import IntentAgent, FuturesAgent, BriefingAgent, OnboardingAgent
 from .models import FactoryConfig, ScenarioSpec, SimulationResult, ScenarioMetrics, OnboardingMeta
-from .onboarding import normalize_factory, estimate_onboarding_coverage
+from .onboarding import (
+    normalize_factory,
+    estimate_onboarding_coverage,
+    extract_explicit_ids,
+    enumerate_entities,
+    compute_coverage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -199,15 +205,20 @@ def run_pipeline(user_text: str) -> dict:
 def run_onboarding(factory_text: str) -> tuple[FactoryConfig, OnboardingMeta]:
     """Run onboarding pipeline: parse and normalize factory description.
 
+    PR7: Multi-stage extraction with coverage instrumentation.
+
     Steps:
-    1. OnboardingAgent.run(factory_text) → raw FactoryConfig
-    2. normalize_factory(raw_factory) → (normalized_factory, warnings)
-    3. Apply failure ladder:
+    0. extract_explicit_ids(factory_text) → explicit IDs from regex
+    1. enumerate_entities(factory_text, explicit_ids) → enumerated machines/jobs (LLM)
+    2. compute_coverage(explicit_ids, enumerated_entities) → coverage report
+    3. OnboardingAgent.run(factory_text) → raw FactoryConfig (full extraction)
+    4. normalize_factory(raw_factory) → (normalized_factory, warnings)
+    5. Apply failure ladder:
        - Level 0 (OK): warnings empty AND factory non-empty
        - Level 1 (DEGRADED): warnings non-empty AND factory non-empty
        - Level 2 (FALLBACK): factory has no machines OR no jobs
-    4. Build OnboardingMeta with failure level and errors
-    5. Return (final_factory, meta)
+    6. Build OnboardingMeta with failure level, coverage warnings, and errors
+    7. Return (final_factory, meta)
 
     Args:
         factory_text: Free-text factory description
@@ -215,35 +226,93 @@ def run_onboarding(factory_text: str) -> tuple[FactoryConfig, OnboardingMeta]:
     Returns:
         Tuple of (FactoryConfig, OnboardingMeta)
         - FactoryConfig is normalized or toy factory on fallback
-        - OnboardingMeta tracks fallback status and repair warnings
+        - OnboardingMeta tracks fallback status, coverage, and repair warnings
 
     Raises:
         Nothing; failures are handled internally with fallback
     """
     logger.debug(f"run_onboarding: factory_text={factory_text[:80]}{'...' if len(factory_text) > 80 else ''}")
 
-    # Step 1: OnboardingAgent parses factory text
+    # Stage 0: Explicit ID extraction (regex-based, zero-LLM)
+    logger.debug("   [Stage 0] Extracting explicit machine/job IDs from text...")
+    explicit_ids = extract_explicit_ids(factory_text)
+    logger.debug(
+        f"   [Stage 0] Detected: {len(explicit_ids.machine_ids)} machines, "
+        f"{len(explicit_ids.job_ids)} jobs"
+    )
+
+    # Stage 1: LLM enumeration (machines/jobs only, no steps/durations)
+    logger.debug("   [Stage 1] Calling LLM to enumerate entities...")
+    try:
+        entities = enumerate_entities(factory_text, explicit_ids.machine_ids, explicit_ids.job_ids)
+        logger.debug(
+            f"   [Stage 1] Enumerated: {len(entities.machines)} machines, "
+            f"{len(entities.jobs)} jobs"
+        )
+    except Exception as e:
+        logger.warning(
+            f"   [Stage 1] LLM enumeration failed: {type(e).__name__}: {str(e)[:100]}. "
+            f"Proceeding without stage-1 coverage."
+        )
+        # Continue without stage-1; rely on stage-2 only
+        entities = None
+
+    # Stage 2: Coverage computation
+    logger.debug("   [Stage 2] Computing coverage between detected and enumerated IDs...")
+    all_errors = []
+    if entities is not None:
+        coverage = compute_coverage(explicit_ids, entities)
+        logger.debug(
+            f"   [Stage 2] Coverage: machines={coverage.machine_coverage:.1%}, "
+            f"jobs={coverage.job_coverage:.1%}"
+        )
+
+        # Surface coverage issues as warnings if coverage is low
+        if coverage.machine_coverage < 1.0:
+            warning_msg = (
+                f"Onboarding coverage warning: text mentions {sorted(explicit_ids.machine_ids)} "
+                f"but enumeration found {sorted(coverage.enumerated_machine_ids)}; "
+                f"missing machines: {sorted(coverage.missing_machines)}"
+            )
+            all_errors.append(warning_msg)
+            logger.warning(f"   [Stage 2] {warning_msg}")
+
+        if coverage.job_coverage < 1.0:
+            warning_msg = (
+                f"Onboarding coverage warning: text mentions {sorted(explicit_ids.job_ids)} "
+                f"but enumeration found {sorted(coverage.enumerated_job_ids)}; "
+                f"missing jobs: {sorted(coverage.missing_jobs)}"
+            )
+            all_errors.append(warning_msg)
+            logger.warning(f"   [Stage 2] {warning_msg}")
+
+    # Stage 3: OnboardingAgent parses factory text (full FactoryConfig)
+    logger.debug("   [Stage 3] Calling OnboardingAgent for full factory config...")
     onboarding_agent = OnboardingAgent()
     raw_factory = onboarding_agent.run(factory_text)
     logger.debug(
-        f"   OnboardingAgent: {len(raw_factory.machines)} machines, {len(raw_factory.jobs)} jobs"
+        f"   [Stage 3] OnboardingAgent: {len(raw_factory.machines)} machines, {len(raw_factory.jobs)} jobs"
     )
 
-    # Step 2: Normalize the factory
-    normalized_factory, warnings = normalize_factory(raw_factory)
+    # Stage 4: Normalize the factory
+    logger.debug("   [Stage 4] Normalizing factory...")
+    normalized_factory, normalization_warnings = normalize_factory(raw_factory)
+    all_errors.extend(normalization_warnings)
     logger.debug(
-        f"   After normalization: {len(normalized_factory.machines)} machines, "
-        f"{len(normalized_factory.jobs)} jobs, {len(warnings)} warnings"
+        f"   [Stage 4] After normalization: {len(normalized_factory.machines)} machines, "
+        f"{len(normalized_factory.jobs)} jobs, {len(normalization_warnings)} normalization warnings"
     )
 
-    # Step 2.5: Check for coverage issues (under-extraction detection)
+    # Stage 4b: Check coverage of normalized factory vs. original text
+    logger.debug("   [Stage 4b] Computing coverage for normalized factory...")
     coverage_warnings = estimate_onboarding_coverage(factory_text, normalized_factory)
+    all_errors.extend(coverage_warnings)
     if coverage_warnings:
+        logger.debug(f"   [Stage 4b] Coverage warnings: {len(coverage_warnings)}")
         for warning in coverage_warnings:
-            logger.warning(warning)
+            logger.warning(f"   [Stage 4b] {warning}")
 
-    # Step 3: Apply failure ladder
-    all_errors = warnings.copy() + coverage_warnings
+    # Stage 5: Apply failure ladder
     if not normalized_factory.machines or not normalized_factory.jobs:
         logger.debug("   Failure level 2 (FALLBACK): normalized factory is empty")
         final_factory = build_toy_factory()
@@ -254,8 +323,8 @@ def run_onboarding(factory_text: str) -> tuple[FactoryConfig, OnboardingMeta]:
         used_default_factory = is_toy_factory(final_factory)
         if used_default_factory:
             logger.debug("   Failure level 1 (DEGRADED): normalized factory is toy factory")
-        elif warnings:
-            logger.debug("   Failure level 1 (DEGRADED): normalized factory has warnings")
+        elif all_errors:
+            logger.debug("   Failure level 1 (DEGRADED): normalized factory has coverage/normalization warnings")
         else:
             logger.debug("   Failure level 0 (OK): normalized factory is clean")
 
@@ -265,7 +334,7 @@ def run_onboarding(factory_text: str) -> tuple[FactoryConfig, OnboardingMeta]:
         f"errors={len(all_errors)}"
     )
 
-    # Step 4: Build OnboardingMeta
+    # Stage 6: Build OnboardingMeta
     meta = OnboardingMeta(
         used_default_factory=used_default_factory,
         onboarding_errors=all_errors,

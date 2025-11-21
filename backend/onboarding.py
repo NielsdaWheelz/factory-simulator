@@ -4,6 +4,12 @@ Onboarding Module
 Provides utilities for safely onboarding free-text factory descriptions into
 the simulation pipeline.
 
+PR7: Multi-stage extraction + coverage instrumentation
+- Stage 0: Deterministic ID extraction (regex-based, zero-LLM)
+- Stage 1: LLM enumeration of entities (machines/jobs only, no steps/durations)
+- Stage 2: Coverage computation between explicit text and enumerated entities
+- Stage 3: Full FactoryConfig LLM call (existing behavior, now with visibility into coverage)
+
 Core functions:
 - normalize_factory(factory: FactoryConfig) -> tuple[FactoryConfig, list[str]]
   Cleans up and validates a FactoryConfig, fixing bad durations, invalid references.
@@ -14,13 +20,283 @@ Core functions:
   Inspects raw text for explicit machine/job IDs and compares to parsed factory.
   Returns human-readable warnings if mentioned entities are missing from the parsed output.
   Pure, deterministic helper; no logging. Used for transparency/observability.
+
+- extract_explicit_ids(factory_text: str) -> ExplicitIds
+  Pure regex-based extraction of machine/job IDs from text.
+  No LLM, no inferences; only what's explicitly mentioned.
+
+- compute_coverage(explicit_ids: ExplicitIds, entities: FactoryEntities) -> CoverageReport
+  Compares detected IDs with enumerated entities.
+  Returns coverage metrics and missing ID sets.
 """
 
 import logging
 import re
+from pydantic import BaseModel
 from .models import FactoryConfig, Machine, Job, Step
+from .llm import call_llm_json
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# ID GRAMMAR HELPERS (Canonical Source of Truth)
+# ============================================================================
+
+def is_machine_id(s: str) -> bool:
+    """
+    Check if a string matches the machine ID grammar.
+
+    Machine IDs must be "M" followed by:
+    - One digit and zero or more alphanumeric/underscore chars, OR
+    - An underscore followed by one or more letters/underscores (NOT digits alone)
+
+    Valid examples: M1, M2, M10, M1_ASSEMBLY, M3_PACK, M_WIDGET
+    Invalid examples: M_1, MACHINE1, M, 1M, M-1
+
+    Args:
+        s: String to validate
+
+    Returns:
+        True if s matches the machine ID pattern, False otherwise
+    """
+    # Pattern: M followed by (digit + optional alnum/underscore) OR (underscore + non-digit chars)
+    pattern = r'^M(?:[0-9][0-9A-Za-z_]*|_[A-Za-z_][A-Za-z0-9_]*)$'
+    return re.match(pattern, s) is not None
+
+
+def is_job_id(s: str) -> bool:
+    """
+    Check if a string matches the job ID grammar.
+
+    Job IDs must be "J" followed by:
+    - One digit and zero or more alphanumeric/underscore chars, OR
+    - An underscore followed by one or more letters/underscores (NOT digits alone)
+
+    Valid examples: J1, J2, J10, J2_A, J3_WIDGET, J_ORDER
+    Invalid examples: JOB1, J_1, 1J, J-1
+
+    Args:
+        s: String to validate
+
+    Returns:
+        True if s matches the job ID pattern, False otherwise
+    """
+    # Pattern: J followed by (digit + optional alnum/underscore) OR (underscore + non-digit chars)
+    pattern = r'^J(?:[0-9][0-9A-Za-z_]*|_[A-Za-z_][A-Za-z0-9_]*)$'
+    return re.match(pattern, s) is not None
+
+
+# ============================================================================
+# STAGE 0: Deterministic ID Extraction Models & Functions
+# ============================================================================
+
+class ExplicitIds(BaseModel):
+    """Result of stage-0 explicit ID extraction from raw text."""
+    machine_ids: set[str]
+    job_ids: set[str]
+
+
+def extract_explicit_ids(factory_text: str) -> ExplicitIds:
+    """
+    Extract explicit machine and job IDs from factory text using regex.
+
+    Pure function: no LLM, no inferences. Only matches what's explicitly present.
+
+    Algorithm:
+    1. Find all word-boundary-delimited substrings that look like IDs
+    2. Validate each against is_machine_id() and is_job_id()
+    3. Return deduplicated sets
+
+    Args:
+        factory_text: Raw factory description text
+
+    Returns:
+        ExplicitIds with sets of detected machine_ids and job_ids
+    """
+    # Pattern: M or J followed by at least one digit or underscore and optional alnum/underscore
+    # Use word boundaries to avoid false matches like "EM1" or "JOB"
+    id_pattern = r'\b[MJ][0-9][0-9A-Za-z_]*\b|\b[MJ]_[0-9A-Za-z_]+\b'
+    candidate_ids = re.findall(id_pattern, factory_text)
+
+    machine_ids = {cid for cid in candidate_ids if is_machine_id(cid)}
+    job_ids = {cid for cid in candidate_ids if is_job_id(cid)}
+
+    return ExplicitIds(machine_ids=machine_ids, job_ids=job_ids)
+
+
+# ============================================================================
+# STAGE 1: Entity Enumeration Models (LLM-backed)
+# ============================================================================
+
+class FactoryEntity(BaseModel):
+    """A factory entity (machine or job) identified by ID and name."""
+    id: str
+    name: str
+
+
+class FactoryEntities(BaseModel):
+    """Collection of enumerated machines and jobs (no steps/durations)."""
+    machines: list[FactoryEntity]
+    jobs: list[FactoryEntity]
+
+
+# ============================================================================
+# STAGE 2: Coverage Computation Models & Functions
+# ============================================================================
+
+class CoverageReport(BaseModel):
+    """Coverage metrics comparing explicit text IDs to enumerated entities."""
+    detected_machine_ids: set[str]
+    detected_job_ids: set[str]
+    enumerated_machine_ids: set[str]
+    enumerated_job_ids: set[str]
+    missing_machines: set[str]
+    missing_jobs: set[str]
+    machine_coverage: float  # 0.0 to 1.0
+    job_coverage: float      # 0.0 to 1.0
+
+
+def compute_coverage(explicit_ids: ExplicitIds, entities: FactoryEntities) -> CoverageReport:
+    """
+    Compute coverage between explicitly detected IDs and enumerated entities.
+
+    Coverage ratio calculation:
+    - If no detected IDs of a type, coverage = 1.0 (nothing to cover)
+    - Else: coverage = |enumerated ∩ detected| / |detected|
+
+    Args:
+        explicit_ids: Result from stage-0 explicit ID extraction
+        entities: Result from stage-1 LLM enumeration
+
+    Returns:
+        CoverageReport with detected/enumerated/missing IDs and coverage ratios
+    """
+    # Get enumerated IDs
+    enumerated_machine_ids = {m.id for m in entities.machines}
+    enumerated_job_ids = {j.id for j in entities.jobs}
+
+    # Compute missing IDs
+    missing_machines = explicit_ids.machine_ids - enumerated_machine_ids
+    missing_jobs = explicit_ids.job_ids - enumerated_job_ids
+
+    # Compute coverage ratios
+    if explicit_ids.machine_ids:
+        machine_coverage = len(enumerated_machine_ids & explicit_ids.machine_ids) / len(explicit_ids.machine_ids)
+    else:
+        machine_coverage = 1.0  # Nothing to cover
+
+    if explicit_ids.job_ids:
+        job_coverage = len(enumerated_job_ids & explicit_ids.job_ids) / len(explicit_ids.job_ids)
+    else:
+        job_coverage = 1.0  # Nothing to cover
+
+    return CoverageReport(
+        detected_machine_ids=explicit_ids.machine_ids,
+        detected_job_ids=explicit_ids.job_ids,
+        enumerated_machine_ids=enumerated_machine_ids,
+        enumerated_job_ids=enumerated_job_ids,
+        missing_machines=missing_machines,
+        missing_jobs=missing_jobs,
+        machine_coverage=machine_coverage,
+        job_coverage=job_coverage,
+    )
+
+
+def enumerate_entities(
+    factory_text: str,
+    required_machine_ids: set[str],
+    required_job_ids: set[str],
+) -> FactoryEntities:
+    """
+    LLM-backed enumeration of machines and jobs from factory text.
+
+    Stage-1 call: separated from full FactoryConfig call to focus on entity enumeration.
+    This call does NOT produce:
+    - Job steps
+    - Step durations
+    - Due times
+    - Full routing information
+
+    The LLM is explicitly instructed to:
+    - Include ALL IDs in the required_*_ids sets
+    - May infer additional entities if reasonable
+    - Extract names from the text if available, else use fallback defaults
+
+    Args:
+        factory_text: Raw factory description text
+        required_machine_ids: Machine IDs explicitly detected in text (stage-0)
+        required_job_ids: Job IDs explicitly detected in text (stage-0)
+
+    Returns:
+        FactoryEntities with enumerated machines and jobs (no steps/durations)
+
+    Raises:
+        Exception: On LLM communication failure (caller should handle gracefully)
+    """
+    prompt = _build_enumeration_prompt(factory_text, required_machine_ids, required_job_ids)
+    logger.debug(
+        f"enumerate_entities: calling LLM to enumerate {len(required_machine_ids)} machines, "
+        f"{len(required_job_ids)} jobs"
+    )
+    entities = call_llm_json(prompt, FactoryEntities)
+    logger.debug(
+        f"enumerate_entities: LLM returned {len(entities.machines)} machines, "
+        f"{len(entities.jobs)} jobs"
+    )
+    return entities
+
+
+def _build_enumeration_prompt(
+    factory_text: str,
+    required_machine_ids: set[str],
+    required_job_ids: set[str],
+) -> str:
+    """
+    Build prompt for stage-1 LLM enumeration (machines and jobs only).
+
+    This prompt is narrower than the full FactoryConfig prompt.
+    Focus: extract machine and job IDs and names only.
+    Exclude: steps, durations, routing details, due times.
+
+    Args:
+        factory_text: Raw factory description
+        required_machine_ids: Machine IDs to include
+        required_job_ids: Job IDs to include
+
+    Returns:
+        Prompt string
+    """
+    required_machines_str = ", ".join(sorted(required_machine_ids)) if required_machine_ids else "(none detected)"
+    required_jobs_str = ", ".join(sorted(required_job_ids)) if required_job_ids else "(none detected)"
+
+    prompt = f"""You are a factory entity enumeration assistant. Your task is to enumerate (list) all machines and jobs mentioned in the factory description. Do not extract steps, durations, or routing details.
+
+CRITICAL REQUIREMENTS:
+1. You MUST include every machine ID in this list: {required_machines_str}
+2. You MUST include every job ID in this list: {required_jobs_str}
+3. You MAY infer additional machines or jobs if explicitly mentioned and reasonable.
+4. For each machine/job, extract a name/description from the text if available.
+5. If no description is available, use a generic name like "Machine M1" or "Job J1".
+
+OUTPUT SCHEMA:
+{{
+  "machines": [
+    {{"id": "M1", "name": "assembly"}},
+    {{"id": "M2", "name": "drill"}}
+  ],
+  "jobs": [
+    {{"id": "J1", "name": "Job 1"}},
+    {{"id": "J2", "name": "Job 2"}}
+  ]
+}}
+
+FACTORY DESCRIPTION:
+{factory_text}
+
+OUTPUT (JSON ONLY):
+"""
+    return prompt
 
 
 def normalize_factory(factory: FactoryConfig) -> tuple[FactoryConfig, list[str]]:
@@ -128,10 +404,9 @@ def estimate_onboarding_coverage(factory_text: str, factory: FactoryConfig) -> l
     are missing from the parsed FactoryConfig. This is a pure helper for observability
     and transparency; it does not change behavior or trigger fallback.
 
-    Heuristics:
-    - Machine IDs: Regex \bM[0-9A-Za-z_]+\b (e.g., M1, M2, M_ASSEMBLY)
-    - Job IDs: Regex \bJ[0-9A-Za-z_]+\b (e.g., J1, J2, J_WIDGET_A)
-    - Generate warnings only if explicit mentions exist but are missing from parsed config.
+    Uses extract_explicit_ids() internally to identify mentions, then compares
+    against the parsed factory. Generates warnings only if explicit mentions
+    exist but are missing from parsed config.
 
     Args:
         factory_text: Raw factory description (user input)
@@ -142,17 +417,10 @@ def estimate_onboarding_coverage(factory_text: str, factory: FactoryConfig) -> l
     """
     warnings = []
 
-    # Extract candidate machine IDs from text
-    # Pattern: M followed by at least one digit, underscore, or letter (e.g., M1, M_ASSEMBLY, M01)
-    # Requires at least one digit or underscore to avoid false positives like "My"
-    machine_id_pattern = r'\bM[0-9][0-9A-Za-z_]*\b|\bM_[0-9A-Za-z_]+\b'
-    mentioned_machine_ids = set(re.findall(machine_id_pattern, factory_text))
-
-    # Extract candidate job IDs from text
-    # Pattern: J followed by at least one digit, underscore, or letter (e.g., J1, J_WIDGET, J01)
-    # Requires at least one digit or underscore to avoid false positives like "Job", "Jobs"
-    job_id_pattern = r'\bJ[0-9][0-9A-Za-z_]*\b|\bJ_[0-9A-Za-z_]+\b'
-    mentioned_job_ids = set(re.findall(job_id_pattern, factory_text))
+    # Extract explicit IDs from text using canonical helpers
+    explicit_ids = extract_explicit_ids(factory_text)
+    mentioned_machine_ids = explicit_ids.machine_ids
+    mentioned_job_ids = explicit_ids.job_ids
 
     # Get parsed IDs from factory
     parsed_machine_ids = {m.id for m in factory.machines}
