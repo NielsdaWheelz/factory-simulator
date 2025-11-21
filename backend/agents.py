@@ -34,70 +34,160 @@ from pydantic import BaseModel
 from .models import ScenarioSpec, ScenarioType, ScenarioMetrics, FactoryConfig
 from .world import build_toy_factory
 from .llm import call_llm_json
+from .onboarding import (
+    extract_explicit_ids,
+    extract_coarse_structure,
+    extract_steps,
+    validate_and_normalize,
+    assess_coverage,
+    ExtractionError,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class OnboardingAgent:
-    """LLM-backed agent for factory description parsing.
+    """LLM-backed agent for factory description parsing with multi-stage orchestration.
 
-    Takes a free-text factory description and interprets it into a FactoryConfig
-    using an LLM. Falls back gracefully to toy factory on any error.
+    PR4: Implements multi-stage pipeline for factory parsing:
+    - Stage 0: Extract explicit IDs (regex-based, zero-LLM)
+    - Stage 1: Extract coarse structure (machines/jobs only)
+    - Stage 2: Extract job steps and timings
+    - Stage 3: Validate and normalize to strict FactoryConfig
+    - Stage 4: Assess coverage and enforce 100% ID coverage
 
-    Prompt includes:
-    - Time interpretation rules (by 10am → 10, etc.)
-    - Inference envelope (what's allowed/forbidden)
-    - Schema definition and example
-    - Explicit instructions for JSON output
+    Enforces 100% ID coverage: all machine/job IDs mentioned in text must appear in final config.
+    Raises ExtractionError on any failure (including coverage mismatch).
+    Does NOT call build_toy_factory or implement fallback; that's the caller's responsibility.
 
-    Error handling: Never throws. Catches all exceptions and returns toy factory.
+    Error handling: Raises ExtractionError on any failure (coverage mismatch, LLM errors, etc).
+    Caller (e.g., run_onboarding) decides fallback strategy.
     """
 
     def run(self, factory_text: str) -> FactoryConfig:
         """
-        Parse factory text into a FactoryConfig using LLM.
+        Orchestrate multi-stage factory parsing pipeline with coverage enforcement.
 
-        Happy path:
-        - Calls call_llm_json with a carefully designed prompt
-        - Returns the LLM-produced FactoryConfig
+        Pipeline stages:
+        0. extract_explicit_ids(text) → ExplicitIds (regex, deterministic)
+        1. extract_coarse_structure(text, ids) → CoarseStructure (LLM)
+        2. extract_steps(text, coarse) → RawFactoryConfig (LLM)
+        3. validate_and_normalize(raw) → FactoryConfig (strict validation)
+        4. assess_coverage(ids, factory) → CoverageReport (coverage check)
 
-        On any error:
-        - Logs the error with truncated factory_text and error details
-        - Returns build_toy_factory() as fallback
-        - Does not raise
+        Enforces 100% ID coverage:
+        - If any detected machine/job ID is not in final factory, raises ExtractionError
+        - Error code: "COVERAGE_MISMATCH"
+        - Includes missing IDs and coverage ratios in details
+
+        Error handling:
+        - ExtractionError from any stage: re-raise as-is
+        - Other exceptions from stages 0-2 (LLM calls, validation):
+          - Wrapped into ExtractionError with code="LLM_FAILURE" or appropriate mapping
+          - Original message (truncated to 200 chars) in error message
+          - Stage name in details for debugging
+        - Does NOT call fallback; caller handles it
+
+        Logging (minimal, info/debug):
+        - Once at start: input text length
+        - After each stage: entity counts (machines, jobs, coverage ratios)
+        - No full text dumps, no full JSON
 
         Args:
-            factory_text: Free-form factory description
+            factory_text: Free-form factory description (user input)
 
         Returns:
-            FactoryConfig (from LLM on success, toy factory on error)
+            FactoryConfig with 100% ID coverage (guaranteed on success)
+
+        Raises:
+            ExtractionError: on any failure (coverage mismatch, LLM error, validation error, etc)
         """
         # Log input
-        preview = factory_text[:200] if factory_text else "(empty)"
-        logger.debug(f"OnboardingAgent: received factory_text len={len(factory_text)}, preview={preview}...")
+        logger.info(f"OnboardingAgent.run: factory_text len={len(factory_text)}")
 
+        # ========== Stage 0: Extract explicit IDs ==========
+        logger.debug("OnboardingAgent: Stage 0 - extracting explicit machine/job IDs...")
+        ids = extract_explicit_ids(factory_text)
+        logger.debug(
+            f"OnboardingAgent: Stage 0 complete - detected machines={len(ids.machine_ids)}, "
+            f"jobs={len(ids.job_ids)}"
+        )
+
+        # ========== Stage 1: Extract coarse structure ==========
+        logger.debug("OnboardingAgent: Stage 1 - extracting coarse structure (machines/jobs only)...")
         try:
-            # Build prompt
-            prompt = self._build_prompt(factory_text)
-
-            # Call LLM
-            cfg = call_llm_json(prompt, FactoryConfig)
-
-            # Log success
-            total_steps = sum(len(job.steps) for job in cfg.jobs)
+            coarse = extract_coarse_structure(factory_text, ids)
             logger.debug(
-                f"OnboardingAgent: produced factory with {len(cfg.machines)} machines, "
-                f"{len(cfg.jobs)} jobs, {total_steps} total steps"
+                f"OnboardingAgent: Stage 1 complete - coarse machines={len(coarse.machines)}, "
+                f"jobs={len(coarse.jobs)}"
             )
-
-            return cfg
-
+        except ExtractionError:
+            raise  # Re-raise as-is
         except Exception as e:
-            # Log error and return fallback
-            logger.warning(
-                f"OnboardingAgent: LLM call failed, falling back to toy factory: {type(e).__name__}: {str(e)[:100]}"
+            raise ExtractionError(
+                code="LLM_FAILURE",
+                message=str(e)[:200],
+                details={"stage": "coarse_extraction", "error_type": type(e).__name__},
             )
-            return build_toy_factory()
+
+        # ========== Stage 2: Extract steps and timings ==========
+        logger.debug("OnboardingAgent: Stage 2 - extracting job steps and timings...")
+        try:
+            raw = extract_steps(factory_text, coarse)
+            logger.debug(
+                f"OnboardingAgent: Stage 2 complete - raw machines={len(raw.machines)}, "
+                f"jobs={len(raw.jobs)}"
+            )
+        except ExtractionError:
+            raise  # Re-raise as-is
+        except Exception as e:
+            raise ExtractionError(
+                code="LLM_FAILURE",
+                message=str(e)[:200],
+                details={"stage": "fine_extraction", "error_type": type(e).__name__},
+            )
+
+        # ========== Stage 3: Validate and normalize ==========
+        logger.debug("OnboardingAgent: Stage 3 - validating and normalizing...")
+        try:
+            factory = validate_and_normalize(raw)
+            logger.debug(
+                f"OnboardingAgent: Stage 3 complete - factory machines={len(factory.machines)}, "
+                f"jobs={len(factory.jobs)}"
+            )
+        except ExtractionError:
+            raise  # Re-raise as-is
+        except Exception as e:
+            raise ExtractionError(
+                code="NORMALIZATION_FAILED",
+                message=str(e)[:200],
+                details={"stage": "normalization", "error_type": type(e).__name__},
+            )
+
+        # ========== Stage 4: Assess coverage ==========
+        logger.debug("OnboardingAgent: Stage 4 - assessing coverage...")
+        coverage = assess_coverage(ids, factory)
+        logger.debug(
+            f"OnboardingAgent: Stage 4 complete - coverage: machines={coverage.machine_coverage:.2f}, "
+            f"jobs={coverage.job_coverage:.2f}"
+        )
+
+        # ========== Enforce 100% coverage ==========
+        if coverage.machine_coverage < 1.0 or coverage.job_coverage < 1.0:
+            raise ExtractionError(
+                code="COVERAGE_MISMATCH",
+                message=f"coverage mismatch: missing machines {sorted(coverage.missing_machines)}, "
+                        f"missing jobs {sorted(coverage.missing_jobs)}",
+                details={
+                    "missing_machines": sorted(coverage.missing_machines),
+                    "missing_jobs": sorted(coverage.missing_jobs),
+                    "machine_coverage": coverage.machine_coverage,
+                    "job_coverage": coverage.job_coverage,
+                },
+            )
+
+        logger.info(f"OnboardingAgent.run: success - {len(factory.machines)} machines, {len(factory.jobs)} jobs")
+        return factory
 
     def _build_prompt(self, factory_text: str) -> str:
         """

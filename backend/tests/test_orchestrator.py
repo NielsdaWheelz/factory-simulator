@@ -437,12 +437,11 @@ class TestEdgeCases:
 class TestRunOnboarding:
     """Test run_onboarding function - factory parsing and normalization."""
 
-    def test_run_onboarding_ok_clean_factory(self):
-        """Test failure level 0 (OK): clean normalized factory."""
-        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent, \
-             patch("backend.orchestrator.normalize_factory") as mock_normalize:
+    def test_run_onboarding_success_clean_factory(self):
+        """Test PR4: agent succeeds with valid factory and 100% coverage."""
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent:
 
-            # OnboardingAgent returns a valid factory
+            # OnboardingAgent returns a valid factory (already validated with 100% coverage)
             valid_factory = FactoryConfig(
                 machines=[Machine(id="M_CUSTOM", name="CustomMachine")],
                 jobs=[Job(id="J_CUSTOM", name="CustomJob", steps=[
@@ -451,108 +450,68 @@ class TestRunOnboarding:
             )
             mock_agent.return_value = valid_factory
 
-            # Normalize returns same factory with no warnings
-            mock_normalize.return_value = (valid_factory, [])
-
             factory, meta = run_onboarding("custom factory")
 
-            # Level 0: clean, used_default_factory should be False
+            # Success: factory from agent is returned, no fallback
             assert factory == valid_factory
             assert meta.used_default_factory is False
             assert meta.onboarding_errors == []
 
-    def test_run_onboarding_degraded_with_warnings(self):
-        """Test failure level 1 (DEGRADED): factory with normalization warnings."""
-        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent, \
-             patch("backend.orchestrator.normalize_factory") as mock_normalize:
+    def test_run_onboarding_coverage_mismatch_falls_back(self):
+        """Test PR4: agent raises COVERAGE_MISMATCH, fallback triggered."""
+        from backend.onboarding import ExtractionError
 
-            valid_factory = FactoryConfig(
-                machines=[Machine(id="M1", name="M1")],
-                jobs=[Job(id="J1", name="J1", steps=[
-                    Step(machine_id="M1", duration_hours=2)
-                ], due_time_hour=12)]
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent:
+
+            # Agent raises coverage mismatch
+            mock_agent.side_effect = ExtractionError(
+                code="COVERAGE_MISMATCH",
+                message="coverage mismatch: missing machines ['M2'], missing jobs []",
+                details={
+                    "missing_machines": ["M2"],
+                    "missing_jobs": [],
+                    "machine_coverage": 0.5,
+                    "job_coverage": 1.0,
+                },
             )
-            mock_agent.return_value = valid_factory
 
-            # Normalize returns factory with warnings
-            mock_normalize.return_value = (valid_factory, ["Warning 1", "Warning 2"])
+            factory, meta = run_onboarding("factory with M1, M2")
+
+            # Fallback triggered
+            toy_factory = build_toy_factory()
+            assert factory.machines == toy_factory.machines
+            assert factory.jobs == toy_factory.jobs
+            assert meta.used_default_factory is True
+            assert "COVERAGE_MISMATCH" in meta.onboarding_errors[0]
+
+    def test_run_onboarding_llm_failure_falls_back(self):
+        """Test PR4: agent raises LLM_FAILURE, fallback triggered."""
+        from backend.onboarding import ExtractionError
+
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent:
+
+            # Agent raises LLM error
+            mock_agent.side_effect = ExtractionError(
+                code="LLM_FAILURE",
+                message="API timeout",
+                details={"stage": "coarse_extraction"},
+            )
 
             factory, meta = run_onboarding("factory text")
 
-            # Level 1: degraded (has warnings but not empty and not toy)
-            assert factory == valid_factory
-            assert meta.used_default_factory is False
-            assert "Warning 1" in meta.onboarding_errors
-            assert "Warning 2" in meta.onboarding_errors
-
-    def test_run_onboarding_fallback_empty_machines(self):
-        """Test failure level 2 (FALLBACK): normalized factory has no machines."""
-        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent, \
-             patch("backend.orchestrator.normalize_factory") as mock_normalize:
-
-            raw_factory = FactoryConfig(machines=[], jobs=[])
-            mock_agent.return_value = raw_factory
-
-            # Normalize returns empty factory
-            mock_normalize.return_value = (raw_factory, [])
-
-            factory, meta = run_onboarding("bad factory")
-
-            # Level 2: fallback
+            # Fallback triggered
             toy_factory = build_toy_factory()
             assert factory.machines == toy_factory.machines
             assert factory.jobs == toy_factory.jobs
             assert meta.used_default_factory is True
-            assert "falling back to toy factory" in meta.onboarding_errors[0]
-
-    def test_run_onboarding_fallback_empty_jobs(self):
-        """Test failure level 2 (FALLBACK): normalized factory has no jobs."""
-        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent, \
-             patch("backend.orchestrator.normalize_factory") as mock_normalize:
-
-            raw_factory = FactoryConfig(
-                machines=[Machine(id="M1", name="M1")],
-                jobs=[]
-            )
-            mock_agent.return_value = raw_factory
-
-            # Normalize returns factory with machines but no jobs
-            mock_normalize.return_value = (raw_factory, [])
-
-            factory, meta = run_onboarding("bad factory")
-
-            # Level 2: fallback
-            toy_factory = build_toy_factory()
-            assert factory.machines == toy_factory.machines
-            assert factory.jobs == toy_factory.jobs
-            assert meta.used_default_factory is True
-            assert "falling back to toy factory" in meta.onboarding_errors[0]
-
-    def test_run_onboarding_toy_factory_detection(self):
-        """Test that toy factory is correctly identified as used_default_factory."""
-        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent, \
-             patch("backend.orchestrator.normalize_factory") as mock_normalize:
-
-            toy_factory = build_toy_factory()
-            mock_agent.return_value = toy_factory
-
-            # Normalize returns toy factory with no warnings
-            mock_normalize.return_value = (toy_factory, [])
-
-            factory, meta = run_onboarding("anything")
-
-            # Toy factory should be detected
-            assert meta.used_default_factory is True
-            assert factory == toy_factory
+            assert "LLM_FAILURE" in meta.onboarding_errors[0]
 
     def test_run_onboarding_returns_tuple(self):
         """Test that run_onboarding returns (FactoryConfig, OnboardingMeta) tuple."""
-        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent, \
-             patch("backend.orchestrator.normalize_factory") as mock_normalize:
+        with patch("backend.orchestrator.OnboardingAgent.run") as mock_agent:
 
-            toy_factory = build_toy_factory()
-            mock_agent.return_value = toy_factory
-            mock_normalize.return_value = (toy_factory, [])
+            valid_factory = build_toy_factory()
+            mock_agent.return_value = valid_factory
 
             result = run_onboarding("test")
 

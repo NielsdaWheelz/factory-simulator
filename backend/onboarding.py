@@ -460,11 +460,11 @@ OUTPUT (JSON ONLY):
 # ============================================================================
 
 class CoverageReport(BaseModel):
-    """Coverage metrics comparing explicit text IDs to enumerated entities."""
-    detected_machine_ids: set[str]
-    detected_job_ids: set[str]
-    enumerated_machine_ids: set[str]
-    enumerated_job_ids: set[str]
+    """Coverage metrics comparing explicit text IDs to parsed factory entities."""
+    detected_machines: set[str]
+    detected_jobs: set[str]
+    parsed_machines: set[str]
+    parsed_jobs: set[str]
     missing_machines: set[str]
     missing_jobs: set[str]
     machine_coverage: float  # 0.0 to 1.0
@@ -506,10 +506,58 @@ def compute_coverage(explicit_ids: ExplicitIds, entities: FactoryEntities) -> Co
         job_coverage = 1.0  # Nothing to cover
 
     return CoverageReport(
-        detected_machine_ids=explicit_ids.machine_ids,
-        detected_job_ids=explicit_ids.job_ids,
-        enumerated_machine_ids=enumerated_machine_ids,
-        enumerated_job_ids=enumerated_job_ids,
+        detected_machines=explicit_ids.machine_ids,
+        detected_jobs=explicit_ids.job_ids,
+        parsed_machines=enumerated_machine_ids,
+        parsed_jobs=enumerated_job_ids,
+        missing_machines=missing_machines,
+        missing_jobs=missing_jobs,
+        machine_coverage=machine_coverage,
+        job_coverage=job_coverage,
+    )
+
+
+def assess_coverage(ids: ExplicitIds, factory: FactoryConfig) -> CoverageReport:
+    """
+    Assess coverage of explicit IDs against a parsed FactoryConfig.
+
+    Pure function: no logging, no LLM calls, deterministic.
+
+    Coverage ratio calculation:
+    - If no detected IDs of a type, coverage = 1.0 (nothing to cover)
+    - Else: coverage = |parsed ∩ detected| / |detected|
+
+    Args:
+        ids: ExplicitIds from stage-0 extraction (detected from text)
+        factory: FactoryConfig from stage-3 normalization (parsed entities)
+
+    Returns:
+        CoverageReport with detected/parsed/missing IDs and coverage ratios
+    """
+    # Get parsed machine and job IDs from factory
+    parsed_machines = {m.id for m in factory.machines}
+    parsed_jobs = {j.id for j in factory.jobs}
+
+    # Compute missing IDs
+    missing_machines = ids.machine_ids - parsed_machines
+    missing_jobs = ids.job_ids - parsed_jobs
+
+    # Compute coverage ratios
+    if ids.machine_ids:
+        machine_coverage = len(parsed_machines & ids.machine_ids) / len(ids.machine_ids)
+    else:
+        machine_coverage = 1.0  # Nothing to cover
+
+    if ids.job_ids:
+        job_coverage = len(parsed_jobs & ids.job_ids) / len(ids.job_ids)
+    else:
+        job_coverage = 1.0  # Nothing to cover
+
+    return CoverageReport(
+        detected_machines=ids.machine_ids,
+        detected_jobs=ids.job_ids,
+        parsed_machines=parsed_machines,
+        parsed_jobs=parsed_jobs,
         missing_machines=missing_machines,
         missing_jobs=missing_jobs,
         machine_coverage=machine_coverage,
