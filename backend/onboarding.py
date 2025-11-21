@@ -32,7 +32,7 @@ Core functions:
 
 import logging
 import re
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from .models import FactoryConfig, Machine, Job, Step
 from .llm import call_llm_json
 
@@ -129,6 +129,40 @@ def extract_explicit_ids(factory_text: str) -> ExplicitIds:
 # STAGE 1: Entity Enumeration Models (LLM-backed)
 # ============================================================================
 
+class CoarseMachine(BaseModel):
+    """A machine identified by ID and name (no steps or other details)."""
+    id: str
+    name: str
+
+    @field_validator("id", "name")
+    @classmethod
+    def validate_nonempty(cls, v: str) -> str:
+        """Ensure id and name are non-empty strings."""
+        if not v or not isinstance(v, str) or len(v.strip()) == 0:
+            raise ValueError("id and name must be non-empty strings")
+        return v
+
+
+class CoarseJob(BaseModel):
+    """A job identified by ID and name (no steps or routing details)."""
+    id: str
+    name: str
+
+    @field_validator("id", "name")
+    @classmethod
+    def validate_nonempty(cls, v: str) -> str:
+        """Ensure id and name are non-empty strings."""
+        if not v or not isinstance(v, str) or len(v.strip()) == 0:
+            raise ValueError("id and name must be non-empty strings")
+        return v
+
+
+class CoarseStructure(BaseModel):
+    """Coarse skeleton of factory: machines and jobs (no steps/durations/routing)."""
+    machines: list[CoarseMachine]
+    jobs: list[CoarseJob]
+
+
 class FactoryEntity(BaseModel):
     """A factory entity (machine or job) identified by ID and name."""
     id: str
@@ -139,6 +173,93 @@ class FactoryEntities(BaseModel):
     """Collection of enumerated machines and jobs (no steps/durations)."""
     machines: list[FactoryEntity]
     jobs: list[FactoryEntity]
+
+
+def extract_coarse_structure(
+    factory_text: str,
+    ids: ExplicitIds,
+) -> CoarseStructure:
+    """
+    Extract a coarse structure (machines + jobs skeleton) from factory text.
+
+    This is a focused, single-responsibility function:
+    - Takes raw factory text and pre-extracted explicit IDs from stage-0
+    - Builds a surgical prompt for the LLM to enumerate machines and jobs only
+    - Calls call_llm_json with the prompt and CoarseStructure schema
+    - Returns the parsed CoarseStructure (machines and jobs, no steps/durations/routing)
+
+    The LLM is instructed to:
+    - Include ALL IDs from ids.machine_ids and ids.job_ids in output (if they appear in text)
+    - NOT invent IDs that don't appear in the text
+    - Extract descriptive names where available, fall back to "M1"/"J1" style names
+    - Focus only on machines and jobs, not steps, durations, or routing
+
+    This function:
+    - Does NOT enforce coverage, normalize, log, or catch exceptions
+    - Does NOT call any fallback logic
+    - Lets exceptions from call_llm_json propagate up (higher layers decide error handling)
+
+    Args:
+        factory_text: Raw factory description text
+        ids: ExplicitIds containing machine_ids and job_ids explicitly detected in text
+
+    Returns:
+        CoarseStructure with machines and jobs (may be empty lists)
+
+    Raises:
+        RuntimeError: If LLM call fails (from call_llm_json)
+        ValidationError: If LLM response doesn't match CoarseStructure schema
+    """
+    prompt = _build_coarse_extraction_prompt(factory_text, ids)
+    structure = call_llm_json(prompt, CoarseStructure)
+    return structure
+
+
+def _build_coarse_extraction_prompt(
+    factory_text: str,
+    ids: ExplicitIds,
+) -> str:
+    """
+    Build a focused prompt for extracting coarse structure (machines + jobs only).
+
+    Args:
+        factory_text: Raw factory description
+        ids: ExplicitIds with machine_ids and job_ids to include
+
+    Returns:
+        Prompt string for the LLM
+    """
+    machines_str = ", ".join(sorted(ids.machine_ids)) if ids.machine_ids else "(none detected)"
+    jobs_str = ", ".join(sorted(ids.job_ids)) if ids.job_ids else "(none detected)"
+
+    prompt = f"""You are a factory structure extraction assistant. Your task is to extract machines and jobs from the factory description.
+
+CRITICAL REQUIREMENTS:
+1. You MUST include every machine ID in this list: {machines_str}
+2. You MUST include every job ID in this list: {jobs_str}
+3. You MUST NOT invent IDs that don't appear in the factory description.
+4. For each machine/job, extract a descriptive name from the text if available.
+5. If no descriptive text is available, use a simple fallback name like "Machine M1" or "Job J1".
+6. DO NOT extract steps, durations, routing, or due times in this response.
+
+OUTPUT SCHEMA (JSON ONLY):
+{{
+  "machines": [
+    {{"id": "M1", "name": "assembly"}},
+    {{"id": "M2", "name": "drill"}}
+  ],
+  "jobs": [
+    {{"id": "J1", "name": "widget assembly"}},
+    {{"id": "J2", "name": "gadget packing"}}
+  ]
+}}
+
+FACTORY DESCRIPTION:
+{factory_text}
+
+OUTPUT (JSON ONLY):
+"""
+    return prompt
 
 
 # ============================================================================
