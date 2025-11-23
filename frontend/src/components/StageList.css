@@ -46,6 +46,12 @@
   gap: 6px;
 }
 
+.stage-row-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
 .stage-row {
   display: flex;
   align-items: center;
@@ -137,15 +143,31 @@
   padding: 20px;
 }
 
+/* inline detail wrapper for accordion-expanded content */
+.stage-detail-inline-wrapper {
+  padding-left: 20px;
+  padding-top: 4px;
+  padding-bottom: 8px;
+  padding-right: 0;
+  margin-bottom: 6px;
+  background-color: #fafafa;
+  border-left: 3px solid #3498db;
+  border-radius: 0 0 3px 3px;
+}
+
 /* responsive: stack stage row items on narrow screens */
 @media (max-width: 768px) {
   .stage-row {
     flex-wrap: wrap;
     gap: 8px;
   }
-  
+
   .stage-summary {
     flex-basis: 100%;
     white-space: normal;
+  }
+
+  .stage-detail-inline-wrapper {
+    padding-left: 12px;
   }
 }
