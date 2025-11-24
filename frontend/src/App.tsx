@@ -3,7 +3,6 @@ import { simulate, type SimulateResponse } from './api';
 import type { PipelineDebugPayload } from './types/pipeline';
 import { PipelineSummary } from './components/PipelineSummary';
 import { StageList } from './components/StageList';
-import { StageDetailPanel } from './components/StageDetailPanel';
 import './App.css';
 
 const DEFAULT_FACTORY_DESCRIPTION = `We run 3 machines (M1 assembly, M2 drill, M3 pack).
@@ -110,22 +109,11 @@ function App() {
                 usedDefaultFactory={result.meta?.used_default_factory ?? false}
               />
               {pipelineDebug && (
-                <>
-                  <StageList
-                    stages={pipelineDebug.stages}
-                    selectedStageId={expandedStageId}
-                    onSelectStage={setExpandedStageId}
-                  />
-                  {expandedStageId && (() => {
-                    const selectedStage = pipelineDebug.stages.find(s => s.id === expandedStageId);
-                    return selectedStage ? (
-                      <StageDetailPanel
-                        stage={selectedStage}
-                        onClose={() => setExpandedStageId(null)}
-                      />
-                    ) : null;
-                  })()}
-                </>
+                <StageList
+                  stages={pipelineDebug.stages}
+                  selectedStageId={expandedStageId}
+                  onSelectStage={setExpandedStageId}
+                />
               )}
             </section>
             {/* Factory Panel */}

@@ -1,4 +1,5 @@
 import type { PipelineStageRecord } from '../types/pipeline';
+import { StageDetailPanel } from './StageDetailPanel';
 import './StageList.css';
 
 export interface StageListProps {
@@ -190,26 +191,35 @@ export function StageList({ stages, selectedStageId, onSelectStage }: StageListP
                 const statusTitle = `${getStatusTitle(stage.status)}${stage.errors.length > 0 ? ': ' + stage.errors.join('; ') : ''}`;
 
                 return (
-                  <div
-                    key={idx}
-                    className={rowClassName}
-                    onClick={() => handleRowClick(stage.id)}
-                    role="button"
-                    tabIndex={0}
-                    title={statusTitle}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        handleRowClick(stage.id);
-                      }
-                    }}
-                  >
-                    <span className={`stage-status-icon ${getStatusClass(stage.status)}`}>
-                      {getStatusIcon(stage.status)}
-                    </span>
-                    <span className="stage-id">{stage.id}:</span>
-                    <span className="stage-name">{stage.name}</span>
-                    <span className="stage-summary">{getStageSummaryText(stage)}</span>
+                  <div key={idx} className="stage-row-wrapper">
+                    <div
+                      className={rowClassName}
+                      onClick={() => handleRowClick(stage.id)}
+                      role="button"
+                      tabIndex={0}
+                      title={statusTitle}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          handleRowClick(stage.id);
+                        }
+                      }}
+                    >
+                      <span className={`stage-status-icon ${getStatusClass(stage.status)}`}>
+                        {getStatusIcon(stage.status)}
+                      </span>
+                      <span className="stage-id">{stage.id}:</span>
+                      <span className="stage-name">{stage.name}</span>
+                      <span className="stage-summary">{getStageSummaryText(stage)}</span>
+                    </div>
+                    {isSelected && (
+                      <div className="stage-detail-inline-wrapper">
+                        <StageDetailPanel
+                          stage={stage}
+                          onClose={() => onSelectStage(null)}
+                        />
+                      </div>
+                    )}
                   </div>
                 );
               })}
