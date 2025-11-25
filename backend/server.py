@@ -39,13 +39,17 @@ if origins_env:
 else:
     allow_origins = ["*"]
 
+import logging
+
+logger = logging.getLogger(__name__)
+logger.info("CORS allow_origins = %r", allow_origins)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 class SimulateRequest(BaseModel):
     """Request body for POST /api/simulate endpoint."""

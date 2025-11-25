@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-I built a **complete, hardened prototype of ProDex v0.1**—a multi-agent LLM orchestration system for manufacturing decision support—in 2 days. The system demonstrates:
+I built a **prototype of ProDex v0.1**—a multi-agent LLM orchestration system for manufacturing decision support—in 2 days. The system demonstrates:
 
 - **Strict architectural separation** between onboarding (factory parsing), decision-making (scenario generation), and deterministic simulation
 - **Production-grade error handling** with graceful fallback mechanisms at every stage
