@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { simulate, type SimulateResponse } from './api';
+import { simulate, runAgent, type SimulateResponse, type AgentResponse } from './api';
 import type { PipelineDebugPayload } from './types/pipeline';
 import { PipelineSummary } from './components/PipelineSummary';
 import { StageList } from './components/StageList';
+import { AgentTrace } from './components/AgentTrace';
 import './App.css';
 
 const DEFAULT_FACTORY_DESCRIPTION = `We run 3 machines (M1 assembly, M2 drill, M3 pack).
@@ -15,25 +16,48 @@ const DEFAULT_SITUATION = `Today is a normal production day. No rush orders or u
 We want to understand baseline performance and explore what-if scenarios.
 Key interest: bottleneck identification and makespan optimization.`;
 
+type Mode = 'pipeline' | 'agent';
+
 function App() {
+  const [mode, setMode] = useState<Mode>('agent'); // Default to new agent mode
   const [factoryDescription, setFactoryDescription] = useState(DEFAULT_FACTORY_DESCRIPTION);
   const [situation, setSituation] = useState(DEFAULT_SITUATION);
+  
+  // Pipeline mode state
   const [result, setResult] = useState<SimulateResponse | null>(null);
   const [pipelineDebug, setPipelineDebug] = useState<PipelineDebugPayload | null>(null);
   const [expandedStageId, setExpandedStageId] = useState<string | null>(null);
+  
+  // Agent mode state
+  const [agentResult, setAgentResult] = useState<AgentResponse | null>(null);
+  
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleSimulate = async () => {
     setLoading(true);
     setError(null);
+    
+    // Reset both result sets
+    setResult(null);
+    setAgentResult(null);
     setPipelineDebug(null);
     setExpandedStageId(null);
+    
     try {
-      const response = await simulate(factoryDescription, situation);
-      setResult(response);
-      setPipelineDebug(response.debug ?? null);
-      console.log('Simulation complete:', response);
+      if (mode === 'agent') {
+        // Agent mode: combine factory + situation into a single request
+        const userRequest = `Factory: ${factoryDescription}\n\nSituation: ${situation}`;
+        const response = await runAgent(userRequest);
+        setAgentResult(response);
+        console.log('Agent complete:', response);
+      } else {
+        // Pipeline mode: use legacy endpoint
+        const response = await simulate(factoryDescription, situation);
+        setResult(response);
+        setPipelineDebug(response.debug ?? null);
+        console.log('Simulation complete:', response);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not reach simulation server';
       setError(message);
@@ -47,12 +71,29 @@ function App() {
     <div className="app">
       <header className="app-header">
         <h1>Factory Simulator</h1>
+        <div className="mode-toggle">
+          <button 
+            className={`mode-btn ${mode === 'agent' ? 'active' : ''}`}
+            onClick={() => setMode('agent')}
+          >
+            🤖 Agent Mode
+          </button>
+          <button 
+            className={`mode-btn ${mode === 'pipeline' ? 'active' : ''}`}
+            onClick={() => setMode('pipeline')}
+          >
+            📊 Pipeline Mode
+          </button>
+        </div>
       </header>
 
       <main className="app-main">
         {/* Instructions */}
         <p className="instructions">
-          1) Describe your factory on the left. 2) Describe today&apos;s situation on the right. 3) Click &quot;Simulate&quot; to see scenarios and a decision briefing.
+          {mode === 'agent' 
+            ? '🤖 Agent Mode: The AI agent will dynamically decide what to do based on your request.'
+            : '📊 Pipeline Mode: Fixed 10-stage pipeline (legacy mode).'
+          }
         </p>
 
         {/* Input Section */}
@@ -98,8 +139,109 @@ function App() {
           </div>
         )}
 
-        {/* Output Panels */}
-        {result && (
+        {/* Output Panels - Agent Mode */}
+        {mode === 'agent' && agentResult && (
+          <div className="output-panels">
+            {/* Agent Trace Panel */}
+            <section className="panel agent-panel">
+              <h2>🤖 Agent Execution</h2>
+              <AgentTrace response={agentResult} />
+            </section>
+            
+            {/* Factory Panel (if agent loaded one) */}
+            {agentResult.factory && (
+              <section className="panel factory-panel">
+                <h2>Inferred Factory</h2>
+                <div className="panel-content">
+                  <div className="factory-subsection">
+                    <h3>Machines</h3>
+                    <ul className="machine-list">
+                      {agentResult.factory.machines.map((machine) => (
+                        <li key={machine.id}>
+                          <strong>{machine.id}</strong> – {machine.name}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="factory-subsection">
+                    <h3>Jobs</h3>
+                    <ul className="job-list">
+                      {agentResult.factory.jobs.map((job) => (
+                        <li key={job.id}>
+                          <strong>{job.id}</strong> ({job.name}) – Due: {job.due_time_hour}h
+                          <ul className="steps-list">
+                            {job.steps.map((step, idx) => (
+                              <li key={idx}>
+                                {step.machine_id}: {step.duration_hours}h
+                              </li>
+                            ))}
+                          </ul>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {/* Scenarios & Metrics (if agent ran simulations) */}
+            {agentResult.scenarios_run.length > 0 && (
+              <section className="panel scenarios-panel">
+                <h2>Scenarios & Metrics</h2>
+                <div className="panel-content">
+                  <table className="metrics-table">
+                    <thead>
+                      <tr>
+                        <th>Scenario</th>
+                        <th>Makespan (h)</th>
+                        <th>Late Jobs</th>
+                        <th>Bottleneck Machine</th>
+                        <th>Bottleneck Util.</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {agentResult.scenarios_run.map((spec, idx) => {
+                        const metric = agentResult.metrics_collected[idx];
+                        if (!metric) return null;
+                        const lateJobs = Object.entries(metric.job_lateness)
+                          .filter(([_, lateness]) => lateness > 0)
+                          .map(([jobId]) => jobId);
+                        return (
+                          <tr key={idx}>
+                            <td>{spec.scenario_type}</td>
+                            <td>{metric.makespan_hour}</td>
+                            <td>{lateJobs.length > 0 ? lateJobs.join(', ') : 'None'}</td>
+                            <td>{metric.bottleneck_machine_id}</td>
+                            <td>{(metric.bottleneck_utilization * 100).toFixed(0)}%</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+
+            {/* Final Answer (Briefing) */}
+            {agentResult.final_answer && (
+              <section className="panel briefing-panel">
+                <h2>Agent Response</h2>
+                <div className="briefing-content">
+                  <div
+                    className="briefing-text"
+                    dangerouslySetInnerHTML={{
+                      __html: markdownToHtml(agentResult.final_answer),
+                    }}
+                  />
+                </div>
+              </section>
+            )}
+          </div>
+        )}
+
+        {/* Output Panels - Pipeline Mode (Legacy) */}
+        {mode === 'pipeline' && result && (
           <div className="output-panels">
             {/* Pipeline Panel */}
             <section className="panel pipeline-panel">

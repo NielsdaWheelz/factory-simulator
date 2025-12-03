@@ -10,11 +10,45 @@
   color: white;
   padding: 20px 40px;
   border-bottom: 2px solid #3498db;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .app-header h1 {
   font-size: 28px;
   font-weight: 600;
+  margin: 0;
+}
+
+/* Mode Toggle */
+.mode-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.mode-btn {
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  background-color: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mode-btn:hover {
+  color: white;
+  border-color: rgba(255, 255, 255, 0.6);
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.mode-btn.active {
+  color: white;
+  border-color: #3498db;
+  background-color: #3498db;
 }
 
 .app-main {
@@ -223,6 +257,16 @@
 .panel-content {
   font-size: 14px;
   line-height: 1.6;
+}
+
+/* Agent Panel */
+.agent-panel {
+  background: #1a1a2e;
+}
+
+.agent-panel h2 {
+  color: #e0e0e0;
+  border-bottom-color: #a78bfa;
 }
 
 /* Factory Panel */
