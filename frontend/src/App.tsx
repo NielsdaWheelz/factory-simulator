@@ -4,7 +4,6 @@ import type { PipelineDebugPayload } from './types/pipeline';
 import { PipelineSummary } from './components/PipelineSummary';
 import { StageList } from './components/StageList';
 import { AgentTrace } from './components/AgentTrace';
-import { PipelineFlow } from './components/PipelineFlow';
 import { DataFlowDiagram } from './components/DataFlowDiagram';
 import './App.css';
 
