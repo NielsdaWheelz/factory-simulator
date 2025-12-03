@@ -4,6 +4,8 @@ import type { PipelineDebugPayload } from './types/pipeline';
 import { PipelineSummary } from './components/PipelineSummary';
 import { StageList } from './components/StageList';
 import { AgentTrace } from './components/AgentTrace';
+import { PipelineFlow } from './components/PipelineFlow';
+import { DataFlowDiagram } from './components/DataFlowDiagram';
 import './App.css';
 
 const DEFAULT_FACTORY_DESCRIPTION = `We run 3 machines (M1 assembly, M2 drill, M3 pack).
@@ -142,9 +144,19 @@ function App() {
         {/* Output Panels - Agent Mode */}
         {mode === 'agent' && agentResult && (
           <div className="output-panels">
-            {/* Agent Trace Panel */}
+            {/* Data Flow Diagram - Main Visualization */}
+            {agentResult.data_flow && agentResult.data_flow.length > 0 && (
+              <section className="panel data-flow-panel">
+                <DataFlowDiagram
+                  dataFlow={agentResult.data_flow}
+                  userRequest={`Factory: ${factoryDescription}\n\nSituation: ${situation}`}
+                  finalAnswer={agentResult.final_answer}
+                />
+              </section>
+            )}
+
+            {/* Agent Trace Panel (collapsed by default, for debugging) */}
             <section className="panel agent-panel">
-              <h2>🤖 Agent Execution</h2>
               <AgentTrace response={agentResult} />
             </section>
             

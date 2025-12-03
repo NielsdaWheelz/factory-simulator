@@ -13,7 +13,7 @@ Core abstractions for the SOTA agent architecture:
 
 from enum import Enum
 from typing import Any, Optional, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from .models import FactoryConfig, ScenarioSpec, ScenarioMetrics
 
@@ -200,6 +200,67 @@ class FactoryValidationReport(BaseModel):
 
 
 # =============================================================================
+# LLM CALL TRACKING (For Demo Observability)
+# =============================================================================
+
+class LLMCallRecord(BaseModel):
+    """Record of a single LLM call for observability/demo purposes."""
+    call_id: int = Field(..., description="Sequential call number")
+    schema_name: str = Field(..., description="Pydantic schema the LLM was asked to produce")
+    purpose: str = Field(default="", description="Human-readable purpose (e.g., 'Parse factory structure')")
+    latency_ms: int = Field(..., description="Round-trip latency in milliseconds")
+    input_tokens: int | None = Field(default=None, description="Input token count if available")
+    output_tokens: int | None = Field(default=None, description="Output token count if available")
+    step_id: int | None = Field(default=None, description="Which plan step triggered this call")
+
+
+# =============================================================================
+# DATA FLOW TRACKING (For Detailed Demo Visualization)
+# =============================================================================
+
+class OperationType(str, Enum):
+    """Type of operation in the data flow."""
+    FUNCTION = "function"      # Pure function call (🔧)
+    LLM = "llm"               # LLM call (🤖)
+    VALIDATION = "validation"  # Validation/check (✓)
+
+
+class DataPreview(BaseModel):
+    """Preview of data flowing through the system."""
+    label: str = Field(..., description="Variable/parameter name")
+    type_name: str = Field(..., description="Type name (e.g., 'str', 'FactoryConfig')")
+    preview: str = Field(..., description="Truncated string representation")
+    size: str | None = Field(default=None, description="Size info (e.g., '247 chars', '3 machines')")
+
+
+class Operation(BaseModel):
+    """A single operation (function call, LLM call, or validation) in the data flow."""
+    id: str = Field(..., description="Unique operation ID")
+    type: OperationType = Field(..., description="Type of operation")
+    name: str = Field(..., description="Function/schema name")
+    duration_ms: int = Field(default=0, description="Duration in milliseconds")
+    inputs: list[DataPreview] = Field(default_factory=list, description="Input data previews")
+    outputs: list[DataPreview] = Field(default_factory=list, description="Output data previews")
+    # LLM-specific fields
+    schema_name: str | None = Field(default=None, description="Pydantic schema name for LLM calls")
+    input_tokens: int | None = Field(default=None, description="Input token count")
+    output_tokens: int | None = Field(default=None, description="Output token count")
+    error: str | None = Field(default=None, description="Error message if operation failed")
+
+
+class DataFlowStep(BaseModel):
+    """A step in the data flow (corresponds to a plan step or planning phase)."""
+    step_id: int = Field(..., description="Step ID (-1 for planning phase)")
+    step_type: str = Field(..., description="Step type (e.g., 'ensure_factory', 'planning')")
+    step_name: str = Field(..., description="Human-readable step name")
+    status: str = Field(default="pending", description="Step status")
+    total_duration_ms: int = Field(default=0, description="Total duration")
+    operations: list[Operation] = Field(default_factory=list, description="Operations in this step")
+    step_input: DataPreview | None = Field(default=None, description="Primary input to this step")
+    step_output: DataPreview | None = Field(default=None, description="Primary output from this step")
+
+
+# =============================================================================
 # AGENT STATE (The Source of Truth)
 # =============================================================================
 
@@ -324,6 +385,23 @@ class AgentState(BaseModel):
     )
     
     # =========================================================================
+    # LLM CALL TRACKING (For Demo Observability)
+    # =========================================================================
+    llm_calls: list[LLMCallRecord] = Field(
+        default_factory=list,
+        description="Record of all LLM calls made during execution"
+    )
+    
+    # =========================================================================
+    # DATA FLOW TRACKING (For Detailed Demo Visualization)
+    # =========================================================================
+    data_flow: list[DataFlowStep] = Field(
+        default_factory=list,
+        description="Detailed data flow through the system"
+    )
+    _current_data_flow_step: Optional["DataFlowStep"] = PrivateAttr(default=None)
+    
+    # =========================================================================
     # FINAL OUTPUT
     # =========================================================================
     final_answer: Optional[str] = Field(
@@ -405,6 +483,94 @@ class AgentState(BaseModel):
     def is_running(self) -> bool:
         """Check if the agent should continue looping."""
         return self.status == AgentStatus.RUNNING
+    
+    def record_llm_call(
+        self, 
+        schema_name: str, 
+        latency_ms: int,
+        purpose: str = "",
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+    ) -> None:
+        """Record an LLM call for observability."""
+        call_id = len(self.llm_calls) + 1
+        self.llm_calls.append(LLMCallRecord(
+            call_id=call_id,
+            schema_name=schema_name,
+            purpose=purpose,
+            latency_ms=latency_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            step_id=self.active_step_index,
+        ))
+    
+    # =========================================================================
+    # DATA FLOW HELPERS
+    # =========================================================================
+    
+    def start_data_flow_step(
+        self,
+        step_id: int,
+        step_type: str,
+        step_name: str,
+        step_input: DataPreview | None = None,
+    ) -> None:
+        """Start tracking a new data flow step."""
+        self._current_data_flow_step = DataFlowStep(
+            step_id=step_id,
+            step_type=step_type,
+            step_name=step_name,
+            status="running",
+            step_input=step_input,
+        )
+    
+    def add_operation(
+        self,
+        op_type: OperationType,
+        name: str,
+        duration_ms: int = 0,
+        inputs: list[DataPreview] | None = None,
+        outputs: list[DataPreview] | None = None,
+        schema_name: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Add an operation to the current data flow step."""
+        if self._current_data_flow_step is None:
+            return  # No active step, skip
+        
+        op_id = f"{self._current_data_flow_step.step_id}_{len(self._current_data_flow_step.operations)}"
+        op = Operation(
+            id=op_id,
+            type=op_type,
+            name=name,
+            duration_ms=duration_ms,
+            inputs=inputs or [],
+            outputs=outputs or [],
+            schema_name=schema_name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            error=error,
+        )
+        self._current_data_flow_step.operations.append(op)
+        self._current_data_flow_step.total_duration_ms += duration_ms
+    
+    def finish_data_flow_step(
+        self,
+        status: str = "done",
+        step_output: DataPreview | None = None,
+    ) -> None:
+        """Finish the current data flow step and add it to the flow."""
+        if self._current_data_flow_step is None:
+            return
+        
+        self._current_data_flow_step.status = status
+        if step_output:
+            self._current_data_flow_step.step_output = step_output
+        
+        self.data_flow.append(self._current_data_flow_step)
+        self._current_data_flow_step = None
     
     def mark_plan_step_running(self, step_id: int) -> None:
         """Mark a plan step as running."""

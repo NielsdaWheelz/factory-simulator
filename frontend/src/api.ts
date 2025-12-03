@@ -81,17 +81,77 @@ export interface AgentTraceStep {
   tool_error?: string | null;
 }
 
-export type AgentStatus = 'RUNNING' | 'DONE' | 'FAILED' | 'MAX_STEPS';
+export interface LLMCallInfo {
+  call_id: number;
+  schema_name: string;
+  purpose: string;
+  latency_ms: number;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  step_id?: number | null;
+}
+
+export interface PlanStepInfo {
+  id: number;
+  type: string;
+  status: 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+  params: Record<string, unknown>;
+  error_message?: string | null;
+}
+
+export interface DataPreviewInfo {
+  label: string;
+  type_name: string;
+  preview: string;
+  size?: string | null;
+}
+
+export interface OperationInfo {
+  id: string;
+  type: 'function' | 'llm' | 'validation';
+  name: string;
+  duration_ms: number;
+  inputs: DataPreviewInfo[];
+  outputs: DataPreviewInfo[];
+  schema_name?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  error?: string | null;
+}
+
+export interface DataFlowStepInfo {
+  step_id: number;
+  step_type: string;
+  step_name: string;
+  status: string;
+  total_duration_ms: number;
+  operations: OperationInfo[];
+  step_input?: DataPreviewInfo | null;
+  step_output?: DataPreviewInfo | null;
+}
+
+export type AgentStatus = 'RUNNING' | 'DONE' | 'FAILED' | 'MAX_STEPS' | 'BUDGET_EXCEEDED';
 
 export interface AgentResponse {
   status: AgentStatus;
   steps_taken: number;
+  llm_calls_used: number;
   final_answer: string | null;
   
   // Domain results
   factory: FactoryConfig | null;
   scenarios_run: ScenarioSpec[];
   metrics_collected: ScenarioMetrics[];
+  
+  // Plan information
+  plan_summary: string | null;
+  plan_steps: PlanStepInfo[];
+  
+  // LLM call tracking
+  llm_calls: LLMCallInfo[];
+  
+  // Data flow visualization
+  data_flow: DataFlowStepInfo[];
   
   // Execution trace
   trace: AgentTraceStep[];
