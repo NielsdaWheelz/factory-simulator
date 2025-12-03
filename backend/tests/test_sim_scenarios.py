@@ -3,8 +3,8 @@ Tests for scenario simulation.
 
 Tests verify:
 - BASELINE scenario produces identical results to simulate_baseline
-- RUSH_ARRIVES scenario prioritizes the rush job
-- M2_SLOWDOWN scenario increases makespan and completion times
+- RUSH_ORDER scenario prioritizes the rush job
+- MACHINE_SLOWDOWN scenario increases makespan and completion times
 - apply_scenario does not mutate the original factory
 """
 
@@ -70,14 +70,14 @@ class TestSimulateBaseline:
 
 
 class TestApplyScenarioRush:
-    """Test RUSH_ARRIVES scenario application."""
+    """Test RUSH_ORDER scenario application."""
 
     def test_rush_tightens_due_time(self):
-        """Verify RUSH_ARRIVES tightens the due time of the rush job."""
+        """Verify RUSH_ORDER tightens the due time of the rush job."""
         factory = build_toy_factory()
         original_j2_due = next(j.due_time_hour for j in factory.jobs if j.id == "J2")
 
-        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J2")
+        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER, rush_job_id="J2")
         modified = apply_scenario(factory, spec)
 
         modified_j2_due = next(j.due_time_hour for j in modified.jobs if j.id == "J2")
@@ -86,10 +86,10 @@ class TestApplyScenarioRush:
         assert modified_j2_due < original_j2_due
 
     def test_rush_does_not_mutate_original(self):
-        """Verify RUSH_ARRIVES does not mutate the original factory."""
+        """Verify RUSH_ORDER does not mutate the original factory."""
         factory = build_toy_factory()
         original_copy = deepcopy(factory)
-        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J2")
+        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER, rush_job_id="J2")
 
         apply_scenario(factory, spec)
 
@@ -97,20 +97,20 @@ class TestApplyScenarioRush:
         assert factory.model_dump() == original_copy.model_dump()
 
     def test_rush_raises_for_nonexistent_job(self):
-        """Verify RUSH_ARRIVES raises ValueError for non-existent job."""
+        """Verify RUSH_ORDER raises ValueError for non-existent job."""
         factory = build_toy_factory()
-        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J999")
+        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER, rush_job_id="J999")
 
         with pytest.raises(ValueError, match="not found"):
             apply_scenario(factory, spec)
 
     def test_rush_preserves_other_jobs(self):
-        """Verify RUSH_ARRIVES preserves other jobs unchanged."""
+        """Verify RUSH_ORDER preserves other jobs unchanged."""
         factory = build_toy_factory()
         j1_original = next(j.due_time_hour for j in factory.jobs if j.id == "J1")
         j3_original = next(j.due_time_hour for j in factory.jobs if j.id == "J3")
 
-        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J2")
+        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER, rush_job_id="J2")
         modified = apply_scenario(factory, spec)
 
         j1_modified = next(j.due_time_hour for j in modified.jobs if j.id == "J1")
@@ -121,12 +121,12 @@ class TestApplyScenarioRush:
         assert j3_modified == j3_original
 
     def test_rush_preserves_job_steps(self):
-        """Verify RUSH_ARRIVES does not change job steps."""
+        """Verify RUSH_ORDER does not change job steps."""
         factory = build_toy_factory()
         original_j2 = next(j for j in factory.jobs if j.id == "J2")
         original_steps = [(s.machine_id, s.duration_hours) for s in original_j2.steps]
 
-        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J2")
+        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER, rush_job_id="J2")
         modified = apply_scenario(factory, spec)
 
         modified_j2 = next(j for j in modified.jobs if j.id == "J2")
@@ -136,22 +136,22 @@ class TestApplyScenarioRush:
 
 
 class TestSimulateRush:
-    """Test RUSH_ARRIVES scenario simulation."""
+    """Test RUSH_ORDER scenario simulation."""
 
     def test_rush_completes_job_earlier_or_same(self):
-        """Verify RUSH_ARRIVES job completes no later than baseline."""
+        """Verify RUSH_ORDER job completes no later than baseline."""
         factory = build_toy_factory()
         baseline_result = simulate_baseline(factory)
-        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J2")
+        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER, rush_job_id="J2")
         rush_result = simulate(factory, spec)
 
         # Rush job should complete no later than baseline
         assert rush_result.job_completion_times["J2"] <= baseline_result.job_completion_times["J2"]
 
     def test_rush_no_machine_overlaps(self):
-        """Verify RUSH_ARRIVES result has no machine overlaps."""
+        """Verify RUSH_ORDER result has no machine overlaps."""
         factory = build_toy_factory()
-        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J2")
+        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER, rush_job_id="J2")
         result = simulate(factory, spec)
 
         # Group steps by machine
@@ -171,10 +171,10 @@ class TestSimulateRush:
                     f"Overlap on {machine_id}: {current} overlaps {next_step}"
 
     def test_rush_affects_other_jobs(self):
-        """Verify RUSH_ARRIVES may affect other jobs' completion times."""
+        """Verify RUSH_ORDER may affect other jobs' completion times."""
         factory = build_toy_factory()
         baseline_result = simulate_baseline(factory)
-        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J1")
+        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER, rush_job_id="J1")
         rush_result = simulate(factory, spec)
 
         # At least one other job should be affected (not faster due to rush)
@@ -189,13 +189,13 @@ class TestSimulateRush:
 
 
 class TestApplyScenarioSlowdown:
-    """Test M2_SLOWDOWN scenario application."""
+    """Test MACHINE_SLOWDOWN scenario application."""
 
     def test_slowdown_increases_m2_durations(self):
-        """Verify M2_SLOWDOWN multiplies M2 step durations."""
+        """Verify MACHINE_SLOWDOWN multiplies M2 step durations."""
         factory = build_toy_factory()
         slowdown_factor = 2
-        spec = ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=slowdown_factor)
+        spec = ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=slowdown_factor)
         modified = apply_scenario(factory, spec)
 
         # Check that all M2 steps are multiplied
@@ -207,10 +207,10 @@ class TestApplyScenarioSlowdown:
                     assert mod_step.duration_hours == orig_step.duration_hours
 
     def test_slowdown_does_not_mutate_original(self):
-        """Verify M2_SLOWDOWN does not mutate the original factory."""
+        """Verify MACHINE_SLOWDOWN does not mutate the original factory."""
         factory = build_toy_factory()
         original_copy = deepcopy(factory)
-        spec = ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=2)
+        spec = ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=2)
 
         apply_scenario(factory, spec)
 
@@ -218,9 +218,9 @@ class TestApplyScenarioSlowdown:
         assert factory.model_dump() == original_copy.model_dump()
 
     def test_slowdown_preserves_non_m2_steps(self):
-        """Verify M2_SLOWDOWN does not affect non-M2 steps."""
+        """Verify MACHINE_SLOWDOWN does not affect non-M2 steps."""
         factory = build_toy_factory()
-        spec = ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=3)
+        spec = ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=3)
         modified = apply_scenario(factory, spec)
 
         for original_job, modified_job in zip(factory.jobs, modified.jobs):
@@ -230,23 +230,23 @@ class TestApplyScenarioSlowdown:
 
 
 class TestSimulateSlowdown:
-    """Test M2_SLOWDOWN scenario simulation."""
+    """Test MACHINE_SLOWDOWN scenario simulation."""
 
     def test_slowdown_increases_makespan(self):
-        """Verify M2_SLOWDOWN increases makespan."""
+        """Verify MACHINE_SLOWDOWN increases makespan."""
         factory = build_toy_factory()
         baseline_result = simulate_baseline(factory)
-        spec = ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=2)
+        spec = ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=2)
         slow_result = simulate(factory, spec)
 
         # Makespan should increase with slowdown
         assert slow_result.makespan_hour >= baseline_result.makespan_hour
 
     def test_slowdown_increases_job_completion_times(self):
-        """Verify M2_SLOWDOWN increases all job completion times."""
+        """Verify MACHINE_SLOWDOWN increases all job completion times."""
         factory = build_toy_factory()
         baseline_result = simulate_baseline(factory)
-        spec = ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=2)
+        spec = ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=2)
         slow_result = simulate(factory, spec)
 
         for job_id in baseline_result.job_completion_times:
@@ -254,9 +254,9 @@ class TestSimulateSlowdown:
                 f"Job {job_id} completion time should not decrease with M2 slowdown"
 
     def test_slowdown_no_machine_overlaps(self):
-        """Verify M2_SLOWDOWN result has no machine overlaps."""
+        """Verify MACHINE_SLOWDOWN result has no machine overlaps."""
         factory = build_toy_factory()
-        spec = ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=2)
+        spec = ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=2)
         result = simulate(factory, spec)
 
         # Group steps by machine
@@ -276,9 +276,9 @@ class TestSimulateSlowdown:
                     f"Overlap on {machine_id}: {current} overlaps {next_step}"
 
     def test_slowdown_preserves_integer_times(self):
-        """Verify M2_SLOWDOWN result uses only integer times."""
+        """Verify MACHINE_SLOWDOWN result uses only integer times."""
         factory = build_toy_factory()
-        spec = ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=2)
+        spec = ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=2)
         result = simulate(factory, spec)
 
         for step in result.scheduled_steps:
@@ -302,8 +302,8 @@ class TestPurityAndValidation:
         # Test all three scenario types
         specs = [
             ScenarioSpec(scenario_type=ScenarioType.BASELINE),
-            ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J1"),
-            ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=2),
+            ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER, rush_job_id="J1"),
+            ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=2),
         ]
 
         for spec in specs:
@@ -328,55 +328,55 @@ class TestPurityAndValidation:
             ScenarioSpec(scenario_type=ScenarioType.BASELINE, slowdown_factor=2)
 
     def test_scenario_spec_validation_rush(self):
-        """Verify ScenarioSpec validates RUSH_ARRIVES scenario."""
+        """Verify ScenarioSpec validates RUSH_ORDER scenario."""
         # Valid
-        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J1")
+        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER, rush_job_id="J1")
         assert spec.rush_job_id == "J1"
 
-        # Invalid: RUSH_ARRIVES without rush_job_id
+        # Invalid: RUSH_ORDER without rush_job_id
         with pytest.raises(ValueError):
-            ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES)
+            ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER)
 
-        # Invalid: RUSH_ARRIVES with empty rush_job_id
+        # Invalid: RUSH_ORDER with empty rush_job_id
         with pytest.raises(ValueError):
-            ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="")
+            ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER, rush_job_id="")
 
-        # Invalid: RUSH_ARRIVES with slowdown_factor
+        # Invalid: RUSH_ORDER with slowdown_factor
         with pytest.raises(ValueError):
-            ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J1", slowdown_factor=2)
+            ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER, rush_job_id="J1", slowdown_factor=2)
 
     def test_scenario_spec_validation_slowdown(self):
-        """Verify ScenarioSpec validates M2_SLOWDOWN scenario."""
+        """Verify ScenarioSpec validates MACHINE_SLOWDOWN scenario."""
         # Valid
-        spec = ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=2)
+        spec = ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=2)
         assert spec.slowdown_factor == 2
 
-        # Invalid: M2_SLOWDOWN without slowdown_factor
+        # Invalid: MACHINE_SLOWDOWN without slowdown_factor
         with pytest.raises(ValueError):
-            ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN)
+            ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN)
 
-        # Invalid: M2_SLOWDOWN with slowdown_factor < 2
+        # Invalid: MACHINE_SLOWDOWN with slowdown_factor < 2
         with pytest.raises(ValueError):
-            ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=1)
+            ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=1)
 
-        # Invalid: M2_SLOWDOWN with slowdown_factor == 0
+        # Invalid: MACHINE_SLOWDOWN with slowdown_factor == 0
         with pytest.raises(ValueError):
-            ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=0)
+            ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=0)
 
-        # Invalid: M2_SLOWDOWN with rush_job_id
+        # Invalid: MACHINE_SLOWDOWN with rush_job_id
         with pytest.raises(ValueError):
-            ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=2, rush_job_id="J1")
+            ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=2, rush_job_id="J1")
 
     def test_simulate_all_jobs_present(self):
         """Verify simulate results include all jobs."""
         factory = build_toy_factory()
         job_ids = {j.id for j in factory.jobs}
 
-        for scenario_type in [ScenarioType.BASELINE, ScenarioType.RUSH_ARRIVES, ScenarioType.M2_SLOWDOWN]:
-            if scenario_type == ScenarioType.RUSH_ARRIVES:
+        for scenario_type in [ScenarioType.BASELINE, ScenarioType.RUSH_ORDER, ScenarioType.MACHINE_SLOWDOWN]:
+            if scenario_type == ScenarioType.RUSH_ORDER:
                 spec = ScenarioSpec(scenario_type=scenario_type, rush_job_id="J1")
-            elif scenario_type == ScenarioType.M2_SLOWDOWN:
-                spec = ScenarioSpec(scenario_type=scenario_type, slowdown_factor=2)
+            elif scenario_type == ScenarioType.MACHINE_SLOWDOWN:
+                spec = ScenarioSpec(scenario_type=scenario_type, slowdown_machine_id="M2", slowdown_factor=2)
             else:
                 spec = ScenarioSpec(scenario_type=scenario_type)
 

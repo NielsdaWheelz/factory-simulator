@@ -15,8 +15,16 @@ from abc import ABC, abstractmethod
 from typing import Any, Type
 from pydantic import BaseModel, Field
 
-from .agent_types import AgentState, ToolCall, ToolResult
-from .models import FactoryConfig, ScenarioSpec, ScenarioType, ScenarioMetrics
+from .agent_types import (
+    AgentState, 
+    ToolCall, 
+    ToolResult,
+    FactoryEntities,
+    FactoryRouting,
+    FactoryParameters,
+    FactoryValidationReport,
+)
+from .models import FactoryConfig, ScenarioSpec, ScenarioType, ScenarioMetrics, Machine, Job, Step
 from .world import build_toy_factory
 from .sim import simulate
 from .metrics import compute_metrics
@@ -111,7 +119,7 @@ class SimulateScenarioArgs(BaseModel):
     """Arguments for the simulate_scenario tool."""
     scenario_type: str = Field(
         ..., 
-        description="Type of scenario: 'BASELINE', 'RUSH_ARRIVES', or 'M2_SLOWDOWN'"
+        description="Type of scenario: 'BASELINE', 'RUSH_ARRIVES', 'M2_SLOWDOWN', or 'MACHINE_SLOWDOWN'"
     )
     rush_job_id: str | None = Field(
         default=None,
@@ -119,7 +127,11 @@ class SimulateScenarioArgs(BaseModel):
     )
     slowdown_factor: int | None = Field(
         default=None,
-        description="Slowdown multiplier for M2 (required for M2_SLOWDOWN, must be >= 2)"
+        description="Slowdown multiplier (required for M2_SLOWDOWN/MACHINE_SLOWDOWN, must be >= 2)"
+    )
+    slowdown_machine_id: str | None = Field(
+        default=None,
+        description="Machine ID to slow down (required for MACHINE_SLOWDOWN, ignored for M2_SLOWDOWN)"
     )
 
 
@@ -296,9 +308,9 @@ class SimulateScenarioTool(Tool):
         return (
             "Run a simulation scenario on the current factory. "
             "Available scenarios:\n"
-            "- BASELINE: Normal operations, no modifications\n"
-            "- RUSH_ARRIVES: Prioritize a job (requires rush_job_id)\n"
-            "- M2_SLOWDOWN: Slow down machine M2 (requires slowdown_factor >= 2)\n"
+            "- baseline: Normal operations, no modifications\n"
+            "- rush_order: Prioritize a job (requires rush_job_id)\n"
+            "- machine_slowdown: Slow down any machine (requires slowdown_factor >= 2 and slowdown_machine_id)\n"
             "Returns makespan, job lateness, bottleneck machine, and utilization metrics. "
             "IMPORTANT: You must have a factory loaded first (use parse_factory or get_demo_factory)."
         )
@@ -327,7 +339,7 @@ class SimulateScenarioTool(Tool):
                 tool_call_id=tool_call_id,
                 tool_name=self.name,
                 success=False,
-                error=f"Invalid scenario_type '{args['scenario_type']}'. Must be BASELINE, RUSH_ARRIVES, or M2_SLOWDOWN."
+                error=f"Invalid scenario_type '{args['scenario_type']}'. Must be baseline, rush_order, or machine_slowdown."
             )
         
         # Build scenario spec
@@ -336,6 +348,7 @@ class SimulateScenarioTool(Tool):
                 scenario_type=scenario_type,
                 rush_job_id=args.get("rush_job_id"),
                 slowdown_factor=args.get("slowdown_factor"),
+                slowdown_machine_id=args.get("slowdown_machine_id"),
             )
         except ValueError as e:
             return ToolResult(
@@ -356,6 +369,24 @@ class SimulateScenarioTool(Tool):
                     error=f"Job '{spec.rush_job_id}' not found. Available jobs: {sorted(valid_job_ids)}"
                 )
         
+        # Validate slowdown_machine_id exists for MACHINE_SLOWDOWN
+        if scenario_type == ScenarioType.MACHINE_SLOWDOWN:
+            if not spec.slowdown_machine_id:
+                return ToolResult(
+                    tool_call_id=tool_call_id,
+                    tool_name=self.name,
+                    success=False,
+                    error="MACHINE_SLOWDOWN requires slowdown_machine_id"
+                )
+            valid_machine_ids = {m.id for m in state.factory.machines}
+            if spec.slowdown_machine_id not in valid_machine_ids:
+                return ToolResult(
+                    tool_call_id=tool_call_id,
+                    tool_name=self.name,
+                    success=False,
+                    error=f"Machine '{spec.slowdown_machine_id}' not found. Available: {sorted(valid_machine_ids)}"
+                )
+        
         # Run simulation
         try:
             result = simulate(state.factory, spec)
@@ -372,6 +403,7 @@ class SimulateScenarioTool(Tool):
                     "scenario_type": spec.scenario_type.value,
                     "rush_job_id": spec.rush_job_id,
                     "slowdown_factor": spec.slowdown_factor,
+                    "slowdown_machine_id": spec.slowdown_machine_id,
                     "makespan_hours": metrics.makespan_hour,
                     "bottleneck_machine": metrics.bottleneck_machine_id,
                     "bottleneck_utilization": f"{metrics.bottleneck_utilization:.0%}",
@@ -511,20 +543,23 @@ class ListPossibleScenariosTool(Tool):
                 "job_due_time": job.due_time_hour,
             })
         
-        # M2 slowdown scenarios
+        # M2 slowdown scenarios (legacy)
         if has_m2:
             for factor in [2, 3]:
                 scenarios.append({
                     "scenario_type": "M2_SLOWDOWN",
-                    "description": f"Machine M2 runs at {factor}x slower speed",
+                    "description": f"Machine M2 runs at {factor}x slower speed (legacy)",
                     "required_args": {"slowdown_factor": factor},
                 })
-        else:
-            scenarios.append({
-                "scenario_type": "M2_SLOWDOWN",
-                "description": "NOT AVAILABLE - no machine M2 in this factory",
-                "available": False,
-            })
+        
+        # Machine slowdown scenarios (new - any machine)
+        for machine_id in machine_ids:
+            for factor in [2, 3]:
+                scenarios.append({
+                    "scenario_type": "MACHINE_SLOWDOWN",
+                    "description": f"Machine {machine_id} runs at {factor}x slower speed",
+                    "required_args": {"slowdown_factor": factor, "slowdown_machine_id": machine_id},
+                })
         
         return ToolResult(
             tool_call_id=tool_call_id,
@@ -657,6 +692,420 @@ class GenerateBriefingTool(Tool):
 
 
 # =============================================================================
+# PHASE 2: ATOMIC PARSING TOOLS
+# =============================================================================
+
+class ExtractEntitiesArgs(BaseModel):
+    """Arguments for entity extraction."""
+    description: str = Field(..., description="Factory description text")
+
+
+class ExtractFactoryEntitiesTool(Tool):
+    """
+    Extract machine and job entities from factory description.
+    
+    First stage of decomposed factory parsing:
+    - Extracts machine IDs and names
+    - Extracts job IDs and names
+    - Does NOT extract routing or parameters
+    """
+    
+    @property
+    def name(self) -> str:
+        return "extract_factory_entities"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Extract machine and job entities from a factory description. "
+            "Returns IDs and names only - use extract_routing for job sequences, "
+            "and extract_parameters for timings."
+        )
+    
+    @property
+    def args_schema(self) -> Type[BaseModel]:
+        return ExtractEntitiesArgs
+    
+    def execute(self, args: dict[str, Any], state: AgentState) -> ToolResult:
+        tool_call_id = str(uuid.uuid4())[:8]
+        description = args["description"]
+        
+        try:
+            # Use regex-based extraction from onboarding module
+            ids = extract_explicit_ids(description)
+            
+            # Extract coarse structure (machines and jobs only)
+            coarse = extract_coarse_structure(description, ids)
+            
+            # Build entity result
+            machine_names = {m.id: m.name for m in coarse.machines}
+            job_names = {j.id: j.name for j in coarse.jobs}
+            
+            # Store in state for subsequent tools
+            from .agent_types import FactoryEntities
+            state.factory_entities = FactoryEntities(
+                machine_ids=sorted(ids.machine_ids),
+                machine_names=machine_names,
+                job_ids=sorted(ids.job_ids),
+                job_names=job_names,
+            )
+            
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=True,
+                output={
+                    "machine_ids": sorted(ids.machine_ids),
+                    "machine_names": machine_names,
+                    "job_ids": sorted(ids.job_ids),
+                    "job_names": job_names,
+                    "total_machines": len(ids.machine_ids),
+                    "total_jobs": len(ids.job_ids),
+                }
+            )
+        except ExtractionError as e:
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=False,
+                error=f"Entity extraction failed ({e.code}): {e.message}"
+            )
+        except Exception as e:
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=False,
+                error=f"Entity extraction failed: {str(e)[:200]}"
+            )
+
+
+class ExtractRoutingArgs(BaseModel):
+    """Arguments for routing extraction."""
+    description: str = Field(..., description="Factory description text")
+
+
+class ExtractRoutingTool(Tool):
+    """
+    Extract job routing (machine sequences) from factory description.
+    
+    Requires entities to be extracted first.
+    """
+    
+    @property
+    def name(self) -> str:
+        return "extract_routing"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Extract job routing information (which machines each job uses, in order). "
+            "IMPORTANT: Run extract_factory_entities first to identify machines and jobs."
+        )
+    
+    @property
+    def args_schema(self) -> Type[BaseModel]:
+        return ExtractRoutingArgs
+    
+    def execute(self, args: dict[str, Any], state: AgentState) -> ToolResult:
+        tool_call_id = str(uuid.uuid4())[:8]
+        description = args["description"]
+        
+        # Check precondition
+        if state.factory_entities is None:
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=False,
+                error="Must run extract_factory_entities first"
+            )
+        
+        try:
+            # Get IDs from state
+            ids = extract_explicit_ids(description)
+            coarse = extract_coarse_structure(description, ids)
+            
+            # Extract full config with routing
+            raw = extract_steps(description, coarse)
+            
+            # Extract just the routing info
+            job_routes = {}
+            for job in raw.jobs:
+                if job.steps:
+                    job_routes[job.id] = [step.machine_id for step in job.steps]
+            
+            # Store in state
+            from .agent_types import FactoryRouting
+            state.factory_routing = FactoryRouting(job_routes=job_routes)
+            
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=True,
+                output={
+                    "job_routes": job_routes,
+                    "jobs_with_routes": len(job_routes),
+                }
+            )
+        except ExtractionError as e:
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=False,
+                error=f"Routing extraction failed ({e.code}): {e.message}"
+            )
+        except Exception as e:
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=False,
+                error=f"Routing extraction failed: {str(e)[:200]}"
+            )
+
+
+class ExtractParametersArgs(BaseModel):
+    """Arguments for parameter extraction."""
+    description: str = Field(..., description="Factory description text")
+
+
+class ExtractParametersTool(Tool):
+    """
+    Extract processing times and due dates from factory description.
+    
+    Requires entities and routing to be extracted first.
+    """
+    
+    @property
+    def name(self) -> str:
+        return "extract_parameters"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Extract processing times and due dates from factory description. "
+            "IMPORTANT: Run extract_factory_entities and extract_routing first."
+        )
+    
+    @property
+    def args_schema(self) -> Type[BaseModel]:
+        return ExtractParametersArgs
+    
+    def execute(self, args: dict[str, Any], state: AgentState) -> ToolResult:
+        tool_call_id = str(uuid.uuid4())[:8]
+        description = args["description"]
+        
+        # Check preconditions
+        if state.factory_entities is None:
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=False,
+                error="Must run extract_factory_entities first"
+            )
+        if state.factory_routing is None:
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=False,
+                error="Must run extract_routing first"
+            )
+        
+        try:
+            ids = extract_explicit_ids(description)
+            coarse = extract_coarse_structure(description, ids)
+            raw = extract_steps(description, coarse)
+            
+            # Extract processing times and due dates
+            processing_times = {}
+            due_times = {}
+            
+            for job in raw.jobs:
+                job_times = {}
+                for step in job.steps:
+                    job_times[step.machine_id] = step.duration_hours
+                processing_times[job.id] = job_times
+                due_times[job.id] = job.due_time_hour
+            
+            # Store in state
+            from .agent_types import FactoryParameters
+            state.factory_parameters = FactoryParameters(
+                processing_times=processing_times,
+                due_times=due_times,
+            )
+            
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=True,
+                output={
+                    "processing_times": processing_times,
+                    "due_times": due_times,
+                }
+            )
+        except ExtractionError as e:
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=False,
+                error=f"Parameter extraction failed ({e.code}): {e.message}"
+            )
+        except Exception as e:
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=False,
+                error=f"Parameter extraction failed: {str(e)[:200]}"
+            )
+
+
+class ValidateFactoryArgs(BaseModel):
+    """Arguments for factory validation (no args needed)."""
+    pass
+
+
+class ValidateFactoryTool(Tool):
+    """
+    Validate factory data and assemble into FactoryConfig.
+    
+    Pure consistency checks + coverage validation.
+    No LLM calls - just validates extracted data.
+    """
+    
+    @property
+    def name(self) -> str:
+        return "validate_factory"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Validate extracted factory data and assemble into final FactoryConfig. "
+            "Checks consistency, coverage, and produces validation report. "
+            "IMPORTANT: Run extract_factory_entities, extract_routing, and extract_parameters first."
+        )
+    
+    @property
+    def args_schema(self) -> Type[BaseModel]:
+        return ValidateFactoryArgs
+    
+    def execute(self, args: dict[str, Any], state: AgentState) -> ToolResult:
+        tool_call_id = str(uuid.uuid4())[:8]
+        
+        # Check all preconditions
+        errors = []
+        warnings = []
+        
+        if state.factory_entities is None:
+            errors.append("Missing entities - run extract_factory_entities first")
+        if state.factory_routing is None:
+            errors.append("Missing routing - run extract_routing first")
+        if state.factory_parameters is None:
+            errors.append("Missing parameters - run extract_parameters first")
+        
+        if errors:
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=False,
+                error="; ".join(errors)
+            )
+        
+        try:
+            # Assemble FactoryConfig from extracted data
+            entities = state.factory_entities
+            routing = state.factory_routing
+            params = state.factory_parameters
+            
+            # Build machines
+            machines = []
+            for mid in entities.machine_ids:
+                machines.append(Machine(
+                    id=mid,
+                    name=entities.machine_names.get(mid, mid)
+                ))
+            
+            # Build jobs
+            jobs = []
+            for jid in entities.job_ids:
+                steps = []
+                route = routing.job_routes.get(jid, [])
+                times = params.processing_times.get(jid, {})
+                
+                for machine_id in route:
+                    duration = times.get(machine_id, 1)  # Default 1 hour
+                    steps.append(Step(machine_id=machine_id, duration_hours=duration))
+                
+                if not steps:
+                    warnings.append(f"Job {jid} has no steps - using default")
+                    # Use first machine as fallback
+                    if machines:
+                        steps.append(Step(machine_id=machines[0].id, duration_hours=1))
+                
+                jobs.append(Job(
+                    id=jid,
+                    name=entities.job_names.get(jid, jid),
+                    steps=steps,
+                    due_time_hour=params.due_times.get(jid, 24)
+                ))
+            
+            # Validate coverage
+            machine_coverage = len(machines) / max(1, len(entities.machine_ids))
+            job_coverage = len(jobs) / max(1, len(entities.job_ids))
+            
+            if machine_coverage < 1.0:
+                warnings.append(f"Machine coverage: {machine_coverage:.0%}")
+            if job_coverage < 1.0:
+                warnings.append(f"Job coverage: {job_coverage:.0%}")
+            
+            # Check for missing machine references in steps
+            machine_ids_set = {m.id for m in machines}
+            for job in jobs:
+                for step in job.steps:
+                    if step.machine_id not in machine_ids_set:
+                        errors.append(f"Job {job.id} references unknown machine {step.machine_id}")
+            
+            if errors:
+                from .agent_types import FactoryValidationReport
+                report = FactoryValidationReport(
+                    valid=False,
+                    errors=errors,
+                    warnings=warnings,
+                    coverage={"machines": machine_coverage, "jobs": job_coverage}
+                )
+                return ToolResult(
+                    tool_call_id=tool_call_id,
+                    tool_name=self.name,
+                    success=False,
+                    error=f"Validation failed: {'; '.join(errors)}"
+                )
+            
+            # Success - create FactoryConfig
+            factory = FactoryConfig(machines=machines, jobs=jobs)
+            state.factory = factory
+            
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=True,
+                output={
+                    "factory": factory.model_dump(),
+                    "machine_count": len(machines),
+                    "job_count": len(jobs),
+                    "machines": [m.id for m in machines],
+                    "jobs": [j.id for j in jobs],
+                    "warnings": warnings,
+                    "coverage": {"machines": machine_coverage, "jobs": job_coverage}
+                }
+            )
+            
+        except Exception as e:
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=False,
+                error=f"Validation failed: {str(e)[:200]}"
+            )
+
+
+# =============================================================================
 # TOOL REGISTRY
 # =============================================================================
 
@@ -698,10 +1147,16 @@ def create_default_registry() -> ToolRegistry:
     """Create and populate the default tool registry."""
     registry = ToolRegistry()
     
-    # Core tools
+    # Core tools (legacy all-in-one)
     registry.register(ParseFactoryTool())
     registry.register(GetDemoFactoryTool())
     registry.register(SimulateScenarioTool())
+    
+    # Phase 2: Atomic parsing tools
+    registry.register(ExtractFactoryEntitiesTool())
+    registry.register(ExtractRoutingTool())
+    registry.register(ExtractParametersTool())
+    registry.register(ValidateFactoryTool())
     
     # Inspection tools
     registry.register(GetCurrentFactoryTool())

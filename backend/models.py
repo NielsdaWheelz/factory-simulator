@@ -1,3 +1,12 @@
+"""
+Core data models for the factory simulator.
+
+These models define the domain objects used throughout the system:
+- Factory configuration (machines, jobs, steps)
+- Scenario specifications
+- Simulation results and metrics
+"""
+
 from enum import Enum
 from typing import Optional, TYPE_CHECKING
 from pydantic import BaseModel, Field, model_validator
@@ -9,9 +18,9 @@ if TYPE_CHECKING:
 
 class ScenarioType(str, Enum):
     """Scenario types for factory simulation."""
-    BASELINE = "BASELINE"
-    RUSH_ARRIVES = "RUSH_ARRIVES"
-    M2_SLOWDOWN = "M2_SLOWDOWN"
+    BASELINE = "baseline"
+    RUSH_ORDER = "rush_order"
+    MACHINE_SLOWDOWN = "machine_slowdown"
 
 
 class Machine(BaseModel):
@@ -71,13 +80,14 @@ class ScenarioSpec(BaseModel):
     Specification of a single what-if scenario to apply to the baseline factory.
 
     - BASELINE: no changes to the factory.
-    - RUSH_ARRIVES: treat an existing job as a rush/prioritized job by tightening its due time.
-    - M2_SLOWDOWN: slow down machine M2 by an integer slowdown_factor >= 2.
+    - RUSH_ORDER: prioritize an existing job by tightening its due time.
+    - MACHINE_SLOWDOWN: slow down a specified machine by slowdown_factor.
     """
 
     scenario_type: ScenarioType = Field(..., description="Type of scenario to apply")
-    rush_job_id: Optional[str] = Field(default=None, description="Job ID for RUSH_ARRIVES scenario")
-    slowdown_factor: Optional[int] = Field(default=None, description="Slowdown multiplier for M2_SLOWDOWN scenario")
+    rush_job_id: Optional[str] = Field(default=None, description="Job ID for RUSH_ORDER scenario")
+    slowdown_factor: Optional[int] = Field(default=None, description="Slowdown multiplier (must be >= 2)")
+    slowdown_machine_id: Optional[str] = Field(default=None, description="Machine ID to slow down")
 
     @model_validator(mode="after")
     def validate_scenario_fields(self):
@@ -87,16 +97,22 @@ class ScenarioSpec(BaseModel):
                 raise ValueError("BASELINE scenario must have rush_job_id=None")
             if self.slowdown_factor is not None:
                 raise ValueError("BASELINE scenario must have slowdown_factor=None")
-        elif self.scenario_type == ScenarioType.RUSH_ARRIVES:
+            if self.slowdown_machine_id is not None:
+                raise ValueError("BASELINE scenario must have slowdown_machine_id=None")
+        elif self.scenario_type == ScenarioType.RUSH_ORDER:
             if self.rush_job_id is None or self.rush_job_id == "":
-                raise ValueError("RUSH_ARRIVES scenario requires a non-empty rush_job_id")
+                raise ValueError("RUSH_ORDER scenario requires a non-empty rush_job_id")
             if self.slowdown_factor is not None:
-                raise ValueError("RUSH_ARRIVES scenario must have slowdown_factor=None")
-        elif self.scenario_type == ScenarioType.M2_SLOWDOWN:
+                raise ValueError("RUSH_ORDER scenario must have slowdown_factor=None")
+            if self.slowdown_machine_id is not None:
+                raise ValueError("RUSH_ORDER scenario must have slowdown_machine_id=None")
+        elif self.scenario_type == ScenarioType.MACHINE_SLOWDOWN:
             if self.slowdown_factor is None or self.slowdown_factor < 2:
-                raise ValueError("M2_SLOWDOWN scenario requires slowdown_factor >= 2")
+                raise ValueError("MACHINE_SLOWDOWN scenario requires slowdown_factor >= 2")
+            if self.slowdown_machine_id is None or self.slowdown_machine_id == "":
+                raise ValueError("MACHINE_SLOWDOWN scenario requires a non-empty slowdown_machine_id")
             if self.rush_job_id is not None:
-                raise ValueError("M2_SLOWDOWN scenario must have rush_job_id=None")
+                raise ValueError("MACHINE_SLOWDOWN scenario must have rush_job_id=None")
         return self
 
 
@@ -124,102 +140,27 @@ class ScenarioMetrics(BaseModel):
 
 
 class OnboardingMeta(BaseModel):
-    """Metadata from the onboarding process.
-
-    Tracks:
-    - Whether the default (toy) factory was used as a fallback
-    - Any errors encountered during normalization
-    - Any assumptions inferred by the LLM during interpretation
-    """
+    """Metadata from the onboarding process."""
 
     used_default_factory: bool = Field(
-        ..., description="True if fallback to toy factory was used; False if onboarded/normalized factory is usable"
+        ..., description="True if fallback to toy factory was used"
     )
     onboarding_errors: list[str] = Field(
         default_factory=list,
-        description="List of errors/warnings from normalization (empty if no repairs needed)"
+        description="List of errors/warnings from normalization"
     )
     inferred_assumptions: list[str] = Field(
         default_factory=list,
-        description="List of assumptions inferred by the LLM during interpretation (empty if none)"
-    )
-
-
-class SimulateResponse(BaseModel):
-    """HTTP response contract for POST /api/simulate endpoint.
-
-    This is the frozen contract for the simulate endpoint response shape.
-    Future PRs may extend fields but must preserve these keys and their types.
-
-    PRF2: Added optional debug field for pipeline instrumentation data.
-    """
-
-    factory: FactoryConfig = Field(..., description="The onboarded and normalized factory configuration")
-    specs: list[ScenarioSpec] = Field(..., description="List of scenario specifications to evaluate")
-    metrics: list[ScenarioMetrics] = Field(..., description="Performance metrics for each scenario (same order as specs)")
-    briefing: str = Field(..., description="Markdown briefing summarizing the scenarios and recommendations")
-    meta: OnboardingMeta = Field(..., description="Metadata from the onboarding process")
-    debug: Optional["PipelineDebugPayload"] = Field(
-        default=None, description="Optional debug payload with pipeline stage execution records (PRF2)"
+        description="List of assumptions inferred by the LLM"
     )
 
 
 class OnboardingRequest(BaseModel):
-    """HTTP request body for POST /api/onboard endpoint.
-
-    Simple request containing just the factory description text.
-    """
-
+    """HTTP request body for onboarding endpoint."""
     factory_description: str = Field(..., description="Free-text description of the factory")
 
 
 class OnboardingResponse(BaseModel):
-    """HTTP response contract for POST /api/onboard endpoint.
-
-    This is the frozen contract for the onboard endpoint response shape.
-    """
-
-    factory: FactoryConfig = Field(..., description="The onboarded and normalized factory configuration")
+    """HTTP response for onboarding endpoint."""
+    factory: FactoryConfig = Field(..., description="The parsed factory configuration")
     meta: OnboardingMeta = Field(..., description="Metadata from the onboarding process")
-
-
-@dataclass
-class PipelineRunResult:
-    """
-    Internal result container for run_onboarded_pipeline with optional debug payload.
-
-    PRF1: This DTO extends the orchestrator's return value to include debug instrumentation
-    without changing the HTTP response shape. The debug field is stripped before serialization
-    to the client.
-
-    Fields:
-    - factory: FactoryConfig
-    - specs: list[ScenarioSpec]
-    - metrics: list[ScenarioMetrics]
-    - briefing: str
-    - meta: OnboardingMeta
-    - debug: PipelineDebugPayload | None (not exposed via HTTP in PRF1)
-    """
-
-    factory: FactoryConfig
-    specs: list[ScenarioSpec]
-    metrics: list[ScenarioMetrics]
-    briefing: str
-    meta: OnboardingMeta
-    debug: "PipelineDebugPayload | None" = None
-
-    def to_http_dict(self) -> dict:
-        """Convert to HTTP response dict.
-
-        PRF2: Now includes debug payload if available.
-        """
-        result = {
-            "factory": self.factory,
-            "specs": self.specs,
-            "metrics": self.metrics,
-            "briefing": self.briefing,
-            "meta": self.meta,
-        }
-        if self.debug is not None:
-            result["debug"] = self.debug
-        return result
