@@ -387,6 +387,61 @@ IMPORTANT: Use EXACT argument names from the tool signatures shown in the observ
 # TOOL EXECUTOR
 # =============================================================================
 
+def _validate_tool_args(tool, args: dict[str, Any]) -> tuple[bool, str | None]:
+    """
+    Validate tool arguments against the tool's schema BEFORE execution.
+    
+    Returns (is_valid, error_message).
+    This prevents cryptic KeyError/TypeError and gives actionable feedback.
+    """
+    schema = tool.args_schema.model_json_schema()
+    properties = schema.get("properties", {})
+    required = schema.get("required", [])
+    
+    # Check for missing required arguments
+    missing = [arg for arg in required if arg not in args]
+    if missing:
+        # Build helpful error message showing expected signature
+        expected_parts = []
+        for arg_name, arg_info in properties.items():
+            arg_type = arg_info.get("type", "any")
+            if arg_name in required:
+                expected_parts.append(f"{arg_name}: {arg_type} (required)")
+            else:
+                expected_parts.append(f"{arg_name}: {arg_type} (optional)")
+        
+        return False, (
+            f"Missing required argument(s): {missing}. "
+            f"Expected arguments for {tool.name}: {', '.join(expected_parts)}"
+        )
+    
+    # Check for unknown arguments (likely typos)
+    unknown = [arg for arg in args if arg not in properties]
+    if unknown:
+        valid_args = list(properties.keys())
+        return False, (
+            f"Unknown argument(s): {unknown}. "
+            f"Valid arguments for {tool.name}: {valid_args}"
+        )
+    
+    # Basic type validation for common cases
+    for arg_name, arg_value in args.items():
+        if arg_value is None:
+            continue  # None is OK for optional args
+            
+        expected_type = properties.get(arg_name, {}).get("type")
+        if expected_type == "string" and not isinstance(arg_value, str):
+            return False, (
+                f"Argument '{arg_name}' should be a string, got {type(arg_value).__name__}"
+            )
+        if expected_type == "integer" and not isinstance(arg_value, int):
+            return False, (
+                f"Argument '{arg_name}' should be an integer, got {type(arg_value).__name__}"
+            )
+    
+    return True, None
+
+
 def execute_tool_calls(
     tool_calls: list[ToolCall],
     state: AgentState,
@@ -397,6 +452,10 @@ def execute_tool_calls(
     
     Each tool is executed in sequence. Results are collected for
     feeding back into the observation.
+    
+    SOTA Features:
+    - Pre-execution argument validation (prevents cryptic errors)
+    - Helpful error messages showing expected arguments
     """
     results = []
     
@@ -414,11 +473,25 @@ def execute_tool_calls(
         tool = registry.get(call.name)
         
         if tool is None:
+            # Suggest similar tool names
+            all_tools = [t.name for t in registry.list_tools()]
             results.append(ToolResult(
                 tool_call_id=call.id,
                 tool_name=call.name,
                 success=False,
-                error=f"Unknown tool: {call.name}"
+                error=f"Unknown tool: '{call.name}'. Available tools: {all_tools}"
+            ))
+            continue
+        
+        # === FIX 1 & 2: Validate arguments BEFORE execution ===
+        is_valid, validation_error = _validate_tool_args(tool, call.arguments)
+        if not is_valid:
+            logger.warning(f"Tool {call.name} argument validation failed: {validation_error}")
+            results.append(ToolResult(
+                tool_call_id=call.id,
+                tool_name=call.name,
+                success=False,
+                error=validation_error
             ))
             continue
         
@@ -473,6 +546,88 @@ def _update_state_from_result(state: AgentState, tool_name: str, result: ToolRes
             state.metrics_collected.append(metrics)
         
         logger.info(f"Simulation complete: {result.output.get('scenario_type')}")
+
+
+# =============================================================================
+# GRACEFUL DEGRADATION (Partial Answer Synthesis)
+# =============================================================================
+
+def _synthesize_partial_answer(state: AgentState) -> str:
+    """
+    Synthesize a useful partial answer when the agent hits MAX_STEPS.
+    
+    Instead of just saying "ran out of steps", we analyze what data
+    was collected and provide a meaningful summary.
+    """
+    parts = ["# Partial Analysis (Step Limit Reached)\n"]
+    parts.append(f"I reached the step limit ({state.max_steps}) before completing the full analysis, ")
+    parts.append("but here's what I was able to determine:\n\n")
+    
+    # Factory information
+    if state.factory:
+        parts.append("## Factory Configuration\n")
+        parts.append(f"- **Machines**: {', '.join([f'{m.id} ({m.name})' for m in state.factory.machines])}\n")
+        parts.append(f"- **Jobs**: {', '.join([f'{j.id} ({j.name})' for j in state.factory.jobs])}\n\n")
+    else:
+        parts.append("## Factory Configuration\n")
+        parts.append("*Factory was not successfully loaded.*\n\n")
+    
+    # Simulation results
+    if state.scenarios_run and state.metrics_collected:
+        parts.append("## Simulation Results\n\n")
+        
+        for spec, metrics in zip(state.scenarios_run, state.metrics_collected):
+            scenario_label = spec.scenario_type.value
+            if spec.rush_job_id:
+                scenario_label += f" (Rush: {spec.rush_job_id})"
+            if spec.slowdown_factor:
+                scenario_label += f" ({spec.slowdown_factor}x slowdown)"
+            
+            parts.append(f"### {scenario_label}\n")
+            parts.append(f"- **Makespan**: {metrics.makespan_hour} hours\n")
+            parts.append(f"- **Bottleneck**: {metrics.bottleneck_machine_id} ({metrics.bottleneck_utilization:.0%} utilization)\n")
+            
+            late_jobs = [f"{k}: +{v}h" for k, v in metrics.job_lateness.items() if v > 0]
+            if late_jobs:
+                parts.append(f"- **Late Jobs**: {', '.join(late_jobs)}\n")
+            else:
+                parts.append("- **Late Jobs**: None\n")
+            parts.append("\n")
+        
+        # Add basic analysis if we have baseline
+        baseline_metrics = None
+        for spec, metrics in zip(state.scenarios_run, state.metrics_collected):
+            if spec.scenario_type.value == "BASELINE":
+                baseline_metrics = metrics
+                break
+        
+        if baseline_metrics:
+            parts.append("## Key Findings\n")
+            parts.append(f"- The bottleneck machine is **{baseline_metrics.bottleneck_machine_id}** ")
+            parts.append(f"with {baseline_metrics.bottleneck_utilization:.0%} utilization.\n")
+            parts.append(f"- Baseline makespan is **{baseline_metrics.makespan_hour} hours**.\n")
+            
+            all_on_time = all(v == 0 for v in baseline_metrics.job_lateness.values())
+            if all_on_time:
+                parts.append("- All jobs complete on time in the baseline scenario.\n")
+    else:
+        parts.append("## Simulation Results\n")
+        parts.append("*No simulations were completed.*\n\n")
+    
+    # What was the agent trying to do?
+    if state.scratchpad:
+        parts.append("\n## Investigation Progress\n")
+        # Show last few thoughts
+        recent_thoughts = state.scratchpad[-3:]
+        for thought in recent_thoughts:
+            # Clean up the thought format
+            clean_thought = thought.replace("[Step ", "- Step ").replace("]", ":")
+            parts.append(f"{clean_thought}\n")
+    
+    parts.append("\n---\n*Analysis was incomplete due to step limit. ")
+    parts.append("Try a more specific question or increase the step limit.*")
+    
+    return "".join(parts)
 
 
 # =============================================================================
@@ -574,16 +729,11 @@ def run_agent(user_request: str, max_steps: int = 15) -> AgentState:
     
     # === LOOP ENDED ===
     
-    # Handle step limit
+    # === FIX 3: Graceful MAX_STEPS handling ===
+    # Instead of just saying "ran out of steps", synthesize a useful partial answer
     if state.status == AgentStatus.MAX_STEPS:
-        logger.warning("Agent hit step limit")
-        state.final_answer = (
-            f"I ran out of steps ({state.max_steps}) before completing the analysis. "
-            f"Here's what I found so far:\n\n"
-            f"- Factory loaded: {'Yes' if state.factory else 'No'}\n"
-            f"- Simulations run: {len(state.scenarios_run)}\n"
-            f"- Last thoughts: {state.scratchpad[-1] if state.scratchpad else 'None'}"
-        )
+        logger.warning("Agent hit step limit - synthesizing partial answer")
+        state.final_answer = _synthesize_partial_answer(state)
     
     logger.info("=" * 60)
     logger.info(f"🤖 Agent finished with status: {state.status.value}")
