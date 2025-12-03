@@ -574,3 +574,205 @@ class TestAgentLoopBehavior:
         assert "Action History" in observations_seen[1]
         assert "get_demo_factory" in observations_seen[1]
 
+
+# =============================================================================
+# FIX 1 & 2: ARGUMENT VALIDATION TESTS
+# =============================================================================
+
+class TestArgumentValidation:
+    """Tests for pre-execution argument validation."""
+
+    def test_missing_required_argument_gives_helpful_error(self, registry):
+        """Test that missing required args give clear error messages."""
+        from backend.agent_engine import _validate_tool_args
+        
+        tool = registry.get("simulate_scenario")
+        
+        # Missing scenario_type (required)
+        is_valid, error = _validate_tool_args(tool, {})
+        
+        assert not is_valid
+        assert "Missing required argument" in error
+        assert "scenario_type" in error
+        assert "required" in error.lower()
+
+    def test_unknown_argument_gives_helpful_error(self, registry):
+        """Test that unknown/typo args are caught with suggestions."""
+        from backend.agent_engine import _validate_tool_args
+        
+        tool = registry.get("simulate_scenario")
+        
+        # Provide all required args PLUS an unknown arg
+        is_valid, error = _validate_tool_args(tool, {
+            "scenario_type": "BASELINE",
+            "scenario_id": "extra"  # Unknown/typo arg
+        })
+        
+        assert not is_valid
+        assert "Unknown argument" in error
+        assert "scenario_id" in error
+        assert "scenario_type" in error  # Should list valid args
+
+    def test_valid_arguments_pass_validation(self, registry):
+        """Test that valid arguments pass validation."""
+        from backend.agent_engine import _validate_tool_args
+        
+        tool = registry.get("simulate_scenario")
+        
+        # Valid args
+        is_valid, error = _validate_tool_args(tool, {"scenario_type": "BASELINE"})
+        
+        assert is_valid
+        assert error is None
+
+    def test_optional_arguments_can_be_omitted(self, registry):
+        """Test that optional arguments can be left out."""
+        from backend.agent_engine import _validate_tool_args
+        
+        tool = registry.get("simulate_scenario")
+        
+        # Only required arg, no optional args
+        is_valid, error = _validate_tool_args(tool, {"scenario_type": "RUSH_ARRIVES"})
+        
+        assert is_valid
+        assert error is None
+
+    def test_tool_with_no_required_args(self, registry):
+        """Test that tools with no required args accept empty dict."""
+        from backend.agent_engine import _validate_tool_args
+        
+        tool = registry.get("get_demo_factory")
+        
+        is_valid, error = _validate_tool_args(tool, {})
+        
+        assert is_valid
+        assert error is None
+
+    def test_execute_tool_calls_validates_before_execution(self):
+        """Test that execute_tool_calls validates args and doesn't call execute on invalid args."""
+        from backend.agent_engine import execute_tool_calls
+        from backend.agent_types import ToolCall
+        
+        state = AgentState(user_request="test")
+        registry = create_default_registry()
+        
+        # Tool call with wrong argument name (missing required arg)
+        tool_calls = [
+            ToolCall(id="1", name="simulate_scenario", arguments={"scenario_id": "BASELINE"})
+        ]
+        
+        results = execute_tool_calls(tool_calls, state, registry)
+        
+        assert len(results) == 1
+        assert not results[0].success
+        # Should report the missing required arg and show expected args
+        assert "Missing required argument" in results[0].error
+        assert "scenario_type" in results[0].error
+        # Should also show expected arguments
+        assert "Expected arguments" in results[0].error
+
+
+# =============================================================================
+# FIX 3: GRACEFUL MAX_STEPS TESTS
+# =============================================================================
+
+class TestGracefulMaxSteps:
+    """Tests for graceful MAX_STEPS handling with partial answer synthesis."""
+
+    def test_max_steps_synthesizes_partial_answer(self, sample_factory, baseline_metrics):
+        """Test that hitting MAX_STEPS produces a useful partial answer."""
+        from backend.agent_engine import _synthesize_partial_answer
+        
+        state = AgentState(user_request="Analyze bottlenecks")
+        state.factory = sample_factory
+        state.scenarios_run.append(ScenarioSpec(scenario_type=ScenarioType.BASELINE))
+        state.metrics_collected.append(baseline_metrics)
+        state.scratchpad.append("[Step 1] Loading factory configuration")
+        state.scratchpad.append("[Step 2] Running baseline simulation")
+        
+        partial_answer = _synthesize_partial_answer(state)
+        
+        # Should have structured sections
+        assert "# Partial Analysis" in partial_answer
+        assert "## Factory Configuration" in partial_answer
+        assert "## Simulation Results" in partial_answer
+        
+        # Should include factory info
+        assert "M1" in partial_answer
+        assert "M2" in partial_answer
+        
+        # Should include simulation results
+        assert "BASELINE" in partial_answer
+        assert "11 hours" in partial_answer or "11h" in partial_answer
+        
+        # Should include key findings
+        assert "bottleneck" in partial_answer.lower()
+
+    def test_max_steps_handles_no_factory(self):
+        """Test that partial answer handles case where factory wasn't loaded."""
+        from backend.agent_engine import _synthesize_partial_answer
+        
+        state = AgentState(user_request="test")
+        state.factory = None  # No factory loaded
+        
+        partial_answer = _synthesize_partial_answer(state)
+        
+        assert "not successfully loaded" in partial_answer.lower() or "no factory" in partial_answer.lower()
+
+    def test_max_steps_handles_no_simulations(self, sample_factory):
+        """Test that partial answer handles case where no simulations ran."""
+        from backend.agent_engine import _synthesize_partial_answer
+        
+        state = AgentState(user_request="test")
+        state.factory = sample_factory
+        # No simulations
+        
+        partial_answer = _synthesize_partial_answer(state)
+        
+        assert "Factory Configuration" in partial_answer
+        assert "No simulations" in partial_answer or "not completed" in partial_answer.lower()
+
+    def test_max_steps_includes_investigation_progress(self, sample_factory, baseline_metrics):
+        """Test that partial answer shows what the agent was working on."""
+        from backend.agent_engine import _synthesize_partial_answer
+        
+        state = AgentState(user_request="test")
+        state.factory = sample_factory
+        state.scenarios_run.append(ScenarioSpec(scenario_type=ScenarioType.BASELINE))
+        state.metrics_collected.append(baseline_metrics)
+        state.scratchpad.append("[Step 1] Parsing factory description")
+        state.scratchpad.append("[Step 2] Running baseline simulation")
+        state.scratchpad.append("[Step 3] About to run rush scenario")
+        
+        partial_answer = _synthesize_partial_answer(state)
+        
+        assert "Investigation Progress" in partial_answer
+        # Should show recent thoughts
+        assert "baseline" in partial_answer.lower()
+
+    def test_agent_uses_partial_synthesis_on_max_steps(self):
+        """Integration test: agent produces synthesized answer on MAX_STEPS."""
+        from backend.agent_types import AgentDecision, ToolCall
+        
+        call_count = 0
+        
+        def mock_llm(observation, system_prompt, registry):
+            nonlocal call_count
+            call_count += 1
+            # Always call a tool (never finish)
+            return AgentDecision(
+                thought="I need to run more simulations",
+                action_type="tool_call",
+                tool_calls=[ToolCall(id=str(call_count), name="get_demo_factory", arguments={})],
+                final_answer=None
+            )
+        
+        with patch("backend.agent_engine.call_llm_for_decision", side_effect=mock_llm):
+            state = run_agent("Analyze factory", max_steps=3)
+        
+        assert state.status == AgentStatus.MAX_STEPS
+        # Should have a synthesized partial answer, not just "ran out of steps"
+        assert state.final_answer is not None
+        assert "Partial Analysis" in state.final_answer
+        assert "step limit" in state.final_answer.lower()
+

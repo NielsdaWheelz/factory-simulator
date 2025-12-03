@@ -148,24 +148,47 @@ export async function simulate(
  * 
  * The agent runs a control loop, dynamically choosing which tools to call
  * and when to stop. Returns the final answer plus the full execution trace.
+ * 
+ * Note: Agent requests can take 1-3 minutes due to multiple LLM calls.
+ * We use a 5 minute timeout to handle slow OpenAI responses.
  */
 export async function runAgent(
   userRequest: string,
   maxSteps: number = 15
 ): Promise<AgentResponse> {
-  const resp = await fetch(`${API_BASE_URL}/api/agent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      user_request: userRequest,
-      max_steps: maxSteps,
-    }),
-  });
+  // Create an AbortController for timeout handling
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000); // 5 minute timeout
 
-  if (!resp.ok) {
-    throw new Error(`agent failed with status ${resp.status}`);
+  try {
+    const resp = await fetch(`${API_BASE_URL}/api/agent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_request: userRequest,
+        max_steps: maxSteps,
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!resp.ok) {
+      throw new Error(`Agent request failed with status ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    return data as AgentResponse;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    
+    if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        throw new Error('Agent request timed out after 5 minutes. The server may still be processing - check the backend logs.');
+      }
+      // Re-throw with more context
+      throw new Error(`Agent request failed: ${error.message}`);
+    }
+    throw error;
   }
-
-  const data = await resp.json();
-  return data as AgentResponse;
 }
