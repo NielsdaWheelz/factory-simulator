@@ -2,11 +2,12 @@
 FastAPI HTTP server for the factory simulator.
 
 Exposes:
-- POST /api/simulate - Legacy pipeline endpoint
-- POST /api/onboard - Factory parsing endpoint
-- POST /api/agent - NEW: SOTA agent endpoint with trace
+- POST /api/agent - Main agent endpoint for factory analysis
 
-Handles JSON serialization of Pydantic models and enum types.
+The agent system handles:
+- Factory parsing from natural language
+- Simulation of scenarios
+- Briefing generation
 """
 
 import logging
@@ -17,13 +18,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from .orchestrator import run_onboarded_pipeline, run_onboarding, is_toy_factory
-from .serializer import serialize_simulation_result
-from .models import OnboardingRequest, OnboardingResponse
 from .agent_engine import run_agent
 from .agent_types import AgentState, AgentStatus
 
-# Configure logging to show INFO level messages in terminal
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
@@ -35,20 +33,17 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Factory Simulator API",
-    description="REST API for factory simulation with onboarded factory configs",
-    version="0.1.0",
+    description="REST API for factory simulation powered by an AI agent",
+    version="2.0.0",
 )
 
-# Configure CORS origins from environment variable or default to "*" for local dev
+# Configure CORS
 origins_env = os.getenv("BACKEND_CORS_ORIGINS")
 if origins_env:
     allow_origins = [o.strip() for o in origins_env.split(",") if o.strip()]
 else:
     allow_origins = ["*"]
 
-import logging
-
-logger = logging.getLogger(__name__)
 logger.info("CORS allow_origins = %r", allow_origins)
 
 app.add_middleware(
@@ -58,18 +53,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class SimulateRequest(BaseModel):
-    """Request body for POST /api/simulate endpoint."""
 
-    factory_description: str
-    situation_text: str
-
+# =============================================================================
+# REQUEST/RESPONSE MODELS
+# =============================================================================
 
 class AgentRequest(BaseModel):
     """Request body for POST /api/agent endpoint."""
     
     user_request: str = Field(..., description="Natural language request for the agent")
     max_steps: int = Field(default=15, description="Maximum agent loop iterations")
+    llm_budget: int = Field(default=10, description="Maximum LLM calls allowed")
 
 
 class AgentTraceStep(BaseModel):
@@ -88,8 +82,9 @@ class AgentTraceStep(BaseModel):
 class AgentResponse(BaseModel):
     """Response from the agent endpoint."""
     
-    status: str = Field(..., description="Agent completion status: DONE, FAILED, MAX_STEPS")
+    status: str = Field(..., description="Agent completion status: DONE, FAILED, MAX_STEPS, BUDGET_EXCEEDED")
     steps_taken: int
+    llm_calls_used: int
     final_answer: Optional[str] = None
     
     # Domain results (if available)
@@ -97,132 +92,30 @@ class AgentResponse(BaseModel):
     scenarios_run: list[dict] = Field(default_factory=list)
     metrics_collected: list[dict] = Field(default_factory=list)
     
+    # Plan information
+    plan_summary: Optional[str] = None
+    
     # The execution trace (for debugging/observability)
     trace: list[AgentTraceStep] = Field(default_factory=list)
     scratchpad: list[str] = Field(default_factory=list)
 
 
-@app.post("/api/simulate")
-def simulate(req: SimulateRequest) -> dict:
-    """
-    HTTP endpoint for running the onboarding + simulation pipeline.
-
-    Wraps run_onboarded_pipeline(factory_text, situation_text) and returns
-    a JSON-serializable response.
-
-    Args:
-        req: Request containing factory_description and situation_text
-
-    Returns:
-        A dict containing:
-        - factory: Factory configuration (machines and jobs)
-        - specs: List of scenario specifications
-        - metrics: List of metrics for each scenario
-        - briefing: Markdown briefing string
-        - meta: Metadata (used_default_factory, onboarding_errors)
-
-    Raises:
-        RuntimeError: If pipeline encounters an error
-    """
-    logger.info("=" * 80)
-    logger.info("🚀 POST /api/simulate endpoint called")
-    logger.info(f"   Factory description length: {len(req.factory_description)} chars")
-    logger.info(f"   Situation text length: {len(req.situation_text)} chars")
-    logger.info("   Starting pipeline...")
-    logger.info("=" * 80)
-
-    result = run_onboarded_pipeline(
-        factory_text=req.factory_description,
-        situation_text=req.situation_text,
-    )
-
-    logger.info("=" * 80)
-    logger.info("✅ Pipeline completed successfully")
-    logger.info(f"   Factory: {len(result.factory.machines)} machines, {len(result.factory.jobs)} jobs")
-    logger.info(f"   Scenarios: {len(result.specs)} generated")
-    logger.info(f"   Metrics: {len(result.metrics)} computed")
-    logger.info(f"   Briefing length: {len(result.briefing)} chars")
-    if result.debug is not None:
-        logger.info(f"   Debug payload: {len(result.debug.stages)} stages")
-    logger.info("   Serializing response...")
-
-    # PRF2: Convert PipelineRunResult to HTTP dict (including debug payload if available)
-    api_response = result.to_http_dict()
-
-    # Ensure result is JSON serializable
-    serialized = serialize_simulation_result(api_response)
-
-    logger.info("=" * 80)
-    logger.info("✅ Response serialized and ready to send")
-    logger.info(f"   Total response keys: {list(serialized.keys())}")
-    logger.info("=" * 80)
-
-    return serialized
-
-
-@app.post("/api/onboard")
-def onboard(req: OnboardingRequest) -> dict:
-    """
-    HTTP endpoint for onboarding a factory description.
-
-    Wraps run_onboarding and returns factory + metadata (no simulation).
-
-    Args:
-        req: Request containing factory_description
-
-    Returns:
-        A dict containing:
-        - factory: Factory configuration (machines and jobs)
-        - meta: Metadata (used_default_factory, onboarding_errors)
-
-    Raises:
-        RuntimeError: If pipeline encounters an error
-    """
-    logger.info("=" * 80)
-    logger.info("🚀 POST /api/onboard endpoint called")
-    logger.info(f"   Factory description length: {len(req.factory_description)} chars")
-    logger.info("   Starting onboarding pipeline...")
-    logger.info("=" * 80)
-
-    factory, meta, _stages = run_onboarding(req.factory_description)
-
-    response = OnboardingResponse(factory=factory, meta=meta)
-
-    logger.info("=" * 80)
-    logger.info("✅ Onboarding completed successfully")
-    logger.info(f"   Factory: {len(response.factory.machines)} machines, {len(response.factory.jobs)} jobs")
-    logger.info(f"   Used default factory: {meta.used_default_factory}")
-    logger.info(f"   Onboarding errors: {len(meta.onboarding_errors)}")
-    logger.info("   Serializing response...")
-
-    # Ensure result is JSON serializable
-    serialized = serialize_simulation_result({
-        "factory": response.factory,
-        "meta": response.meta,
-    })
-
-    logger.info("=" * 80)
-    logger.info("✅ Response serialized and ready to send")
-    logger.info(f"   Total response keys: {list(serialized.keys())}")
-    logger.info("=" * 80)
-
-    return serialized
-
+# =============================================================================
+# ENDPOINTS
+# =============================================================================
 
 @app.post("/api/agent")
 def agent_endpoint(req: AgentRequest) -> dict:
     """
-    HTTP endpoint for the SOTA agent system.
+    Main endpoint for factory analysis using the AI agent.
     
-    This endpoint runs the full agent loop, allowing the LLM to:
-    - Decide which tools to call
-    - Iterate until it has enough information
-    - Generate a final answer
-    
-    Returns the final answer plus a full execution trace for observability.
+    The agent will:
+    1. Generate a plan based on the user's request
+    2. Execute the plan (parse factory, run simulations, etc.)
+    3. Generate a final answer with insights and recommendations
     
     Args:
-        req: Request containing user_request and optional max_steps
+        req: Request containing user_request, max_steps, and llm_budget
     
     Returns:
         AgentResponse with status, final_answer, domain results, and trace
@@ -231,10 +124,11 @@ def agent_endpoint(req: AgentRequest) -> dict:
     logger.info("🤖 POST /api/agent endpoint called")
     logger.info(f"   User request: {req.user_request[:100]}...")
     logger.info(f"   Max steps: {req.max_steps}")
+    logger.info(f"   LLM budget: {req.llm_budget}")
     logger.info("=" * 80)
     
     # Run the agent
-    state = run_agent(req.user_request, max_steps=req.max_steps)
+    state = run_agent(req.user_request, max_steps=req.max_steps, llm_budget=req.llm_budget)
     
     # Build trace from messages and scratchpad
     trace = _build_trace_from_state(state)
@@ -243,10 +137,12 @@ def agent_endpoint(req: AgentRequest) -> dict:
     response = AgentResponse(
         status=state.status.value,
         steps_taken=state.steps,
+        llm_calls_used=state.llm_calls_used,
         final_answer=state.final_answer,
         factory=state.factory.model_dump() if state.factory else None,
         scenarios_run=[s.model_dump() for s in state.scenarios_run],
         metrics_collected=[m.model_dump() for m in state.metrics_collected],
+        plan_summary=state.get_plan_summary() if state.plan else None,
         trace=trace,
         scratchpad=state.scratchpad,
     )
@@ -254,6 +150,7 @@ def agent_endpoint(req: AgentRequest) -> dict:
     logger.info("=" * 80)
     logger.info(f"🤖 Agent completed with status: {state.status.value}")
     logger.info(f"   Steps: {state.steps}")
+    logger.info(f"   LLM calls: {state.llm_calls_used}/{req.llm_budget}")
     logger.info(f"   Scenarios run: {len(state.scenarios_run)}")
     logger.info(f"   Final answer length: {len(state.final_answer or '')}")
     logger.info("=" * 80)
@@ -306,7 +203,7 @@ def _build_trace_from_state(state: AgentState) -> list[AgentTraceStep]:
                 thought=thought,
                 action_type="tool_call",
                 tool_name=msg.name,
-                tool_args=None,  # We don't store args in messages currently
+                tool_args=None,
                 tool_success=tool_success,
                 tool_output=tool_output,
                 tool_error=tool_error,
@@ -328,3 +225,9 @@ def _build_trace_from_state(state: AgentState) -> list[AgentTraceStep]:
         ))
     
     return trace
+
+
+@app.get("/health")
+def health():
+    """Health check endpoint."""
+    return {"status": "ok"}

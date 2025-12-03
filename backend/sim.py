@@ -96,9 +96,9 @@ def apply_scenario(factory: FactoryConfig, spec: ScenarioSpec) -> FactoryConfig:
     """
     Return a modified FactoryConfig according to the given ScenarioSpec.
 
-    - BASELINE: return a deep copy of the original factory (for safety).
-    - RUSH_ARRIVES: prioritize an existing job by tightening its due_time_hour.
-    - M2_SLOWDOWN: slow machine M2 by multiplying its step durations by slowdown_factor.
+    - baseline: return a deep copy of the original factory (for safety).
+    - rush_order: prioritize an existing job by tightening its due_time_hour.
+    - machine_slowdown: slow a specified machine by slowdown_factor.
 
     Args:
         factory: Original FactoryConfig (never mutated)
@@ -108,7 +108,8 @@ def apply_scenario(factory: FactoryConfig, spec: ScenarioSpec) -> FactoryConfig:
         Modified FactoryConfig (a deep copy of the input)
 
     Raises:
-        ValueError: If RUSH_ARRIVES references a non-existent job
+        ValueError: If rush_order references a non-existent job
+        ValueError: If machine_slowdown references a non-existent machine
     """
     # Always start with a deep copy to avoid mutating the original
     factory_copy = deepcopy(factory)
@@ -117,9 +118,9 @@ def apply_scenario(factory: FactoryConfig, spec: ScenarioSpec) -> FactoryConfig:
         # No changes, just return the copy
         return factory_copy
 
-    elif spec.scenario_type == ScenarioType.RUSH_ARRIVES:
+    elif spec.scenario_type == ScenarioType.RUSH_ORDER:
         # Find the job by ID and tighten its due time
-        assert spec.rush_job_id is not None, "RUSH_ARRIVES requires rush_job_id"
+        assert spec.rush_job_id is not None, "rush_order requires rush_job_id"
 
         rush_job = None
         for job in factory_copy.jobs:
@@ -138,14 +139,23 @@ def apply_scenario(factory: FactoryConfig, spec: ScenarioSpec) -> FactoryConfig:
 
         return factory_copy
 
-    elif spec.scenario_type == ScenarioType.M2_SLOWDOWN:
-        # Slow down all M2 steps
+    elif spec.scenario_type == ScenarioType.MACHINE_SLOWDOWN:
         assert spec.slowdown_factor is not None and spec.slowdown_factor >= 2, \
-            "M2_SLOWDOWN requires slowdown_factor >= 2"
+            "machine_slowdown requires slowdown_factor >= 2"
+        assert spec.slowdown_machine_id is not None, \
+            "machine_slowdown requires slowdown_machine_id"
 
+        machine_id = spec.slowdown_machine_id
+        
+        # Validate machine exists in factory
+        machine_ids = {m.id for m in factory_copy.machines}
+        if machine_id not in machine_ids:
+            raise ValueError(f"Machine '{machine_id}' not found in factory. Available: {sorted(machine_ids)}")
+
+        # Apply slowdown to all steps on this machine
         for job in factory_copy.jobs:
             for step in job.steps:
-                if step.machine_id == "M2":
+                if step.machine_id == machine_id:
                     step.duration_hours = step.duration_hours * spec.slowdown_factor
 
         return factory_copy

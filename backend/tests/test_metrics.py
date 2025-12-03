@@ -196,7 +196,7 @@ class TestConsistencyAcrossEntrypoints:
         factory = build_toy_factory()
 
         baseline_spec = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-        slowdown_spec = ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=2)
+        slowdown_spec = ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=2)
 
         result_baseline = simulate(factory, baseline_spec)
         result_slowdown = simulate(factory, slowdown_spec)
@@ -358,9 +358,9 @@ class TestEdgeCases:
             assert lateness == 0, f"Job {job_id} is late in baseline: {lateness}h"
 
     def test_metrics_with_rush_scenario(self):
-        """Verify metrics computation works with RUSH_ARRIVES scenario."""
+        """Verify metrics computation works with RUSH_ORDER scenario."""
         factory = build_toy_factory()
-        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ARRIVES, rush_job_id="J2")
+        spec = ScenarioSpec(scenario_type=ScenarioType.RUSH_ORDER, rush_job_id="J2")
         result = simulate(factory, spec)
         metrics = compute_metrics(factory, result)
 
@@ -370,9 +370,9 @@ class TestEdgeCases:
         assert metrics.bottleneck_machine_id in {m.id for m in factory.machines}
 
     def test_metrics_with_slowdown_scenario(self):
-        """Verify metrics computation works with M2_SLOWDOWN scenario."""
+        """Verify metrics computation works with MACHINE_SLOWDOWN scenario."""
         factory = build_toy_factory()
-        spec = ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=2)
+        spec = ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=2)
         result = simulate(factory, spec)
         metrics = compute_metrics(factory, result)
 
@@ -386,7 +386,7 @@ class TestEdgeCases:
         factory = build_toy_factory()
 
         baseline_spec = ScenarioSpec(scenario_type=ScenarioType.BASELINE)
-        slowdown_spec = ScenarioSpec(scenario_type=ScenarioType.M2_SLOWDOWN, slowdown_factor=2)
+        slowdown_spec = ScenarioSpec(scenario_type=ScenarioType.MACHINE_SLOWDOWN, slowdown_machine_id="M2", slowdown_factor=2)
 
         result_baseline = simulate(factory, baseline_spec)
         result_slowdown = simulate(factory, slowdown_spec)
