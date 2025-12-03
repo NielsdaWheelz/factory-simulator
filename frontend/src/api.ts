@@ -66,6 +66,38 @@ export interface SimulateResponse {
   debug?: PipelineDebugPayload | null; // PRF2: Optional debug payload with pipeline stage records
 }
 
+// =============================================================================
+// AGENT TYPES (SOTA Agent System)
+// =============================================================================
+
+export interface AgentTraceStep {
+  step_number: number;
+  thought: string;
+  action_type: 'tool_call' | 'final_answer';
+  tool_name?: string | null;
+  tool_args?: Record<string, unknown> | null;
+  tool_success?: boolean | null;
+  tool_output?: string | null;
+  tool_error?: string | null;
+}
+
+export type AgentStatus = 'RUNNING' | 'DONE' | 'FAILED' | 'MAX_STEPS';
+
+export interface AgentResponse {
+  status: AgentStatus;
+  steps_taken: number;
+  final_answer: string | null;
+  
+  // Domain results
+  factory: FactoryConfig | null;
+  scenarios_run: ScenarioSpec[];
+  metrics_collected: ScenarioMetrics[];
+  
+  // Execution trace
+  trace: AgentTraceStep[];
+  scratchpad: string[];
+}
+
 const DEFAULT_API_BASE_URL = 'http://localhost:8000';
 
 const API_BASE_URL =
@@ -109,4 +141,31 @@ export async function simulate(
 
   const data = await resp.json();
   return data as SimulateResponse;
+}
+
+/**
+ * Call the SOTA agent endpoint.
+ * 
+ * The agent runs a control loop, dynamically choosing which tools to call
+ * and when to stop. Returns the final answer plus the full execution trace.
+ */
+export async function runAgent(
+  userRequest: string,
+  maxSteps: number = 15
+): Promise<AgentResponse> {
+  const resp = await fetch(`${API_BASE_URL}/api/agent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_request: userRequest,
+      max_steps: maxSteps,
+    }),
+  });
+
+  if (!resp.ok) {
+    throw new Error(`agent failed with status ${resp.status}`);
+  }
+
+  const data = await resp.json();
+  return data as AgentResponse;
 }
