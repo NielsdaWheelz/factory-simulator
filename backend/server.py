@@ -79,6 +79,60 @@ class AgentTraceStep(BaseModel):
     tool_error: Optional[str] = None
 
 
+class LLMCallInfo(BaseModel):
+    """Info about an LLM call for frontend display."""
+    call_id: int
+    schema_name: str
+    purpose: str
+    latency_ms: int
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    step_id: Optional[int] = None
+
+
+class PlanStepInfo(BaseModel):
+    """Info about a plan step for frontend display."""
+    id: int
+    type: str
+    status: str  # "pending", "running", "done", "failed"
+    params: dict = {}
+    error_message: Optional[str] = None
+
+
+class DataPreviewInfo(BaseModel):
+    """Preview of data flowing through the system."""
+    label: str
+    type_name: str
+    preview: str
+    size: Optional[str] = None
+
+
+class OperationInfo(BaseModel):
+    """A single operation in the data flow."""
+    id: str
+    type: str  # "function", "llm", "validation"
+    name: str
+    duration_ms: int = 0
+    inputs: list[DataPreviewInfo] = Field(default_factory=list)
+    outputs: list[DataPreviewInfo] = Field(default_factory=list)
+    schema_name: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    error: Optional[str] = None
+
+
+class DataFlowStepInfo(BaseModel):
+    """A step in the data flow for visualization."""
+    step_id: int
+    step_type: str
+    step_name: str
+    status: str
+    total_duration_ms: int = 0
+    operations: list[OperationInfo] = Field(default_factory=list)
+    step_input: Optional[DataPreviewInfo] = None
+    step_output: Optional[DataPreviewInfo] = None
+
+
 class AgentResponse(BaseModel):
     """Response from the agent endpoint."""
     
@@ -92,8 +146,15 @@ class AgentResponse(BaseModel):
     scenarios_run: list[dict] = Field(default_factory=list)
     metrics_collected: list[dict] = Field(default_factory=list)
     
-    # Plan information
+    # Plan information (structured for visualization)
     plan_summary: Optional[str] = None
+    plan_steps: list[PlanStepInfo] = Field(default_factory=list)
+    
+    # LLM call tracking (for observability)
+    llm_calls: list[LLMCallInfo] = Field(default_factory=list)
+    
+    # Data flow visualization
+    data_flow: list[DataFlowStepInfo] = Field(default_factory=list)
     
     # The execution trace (for debugging/observability)
     trace: list[AgentTraceStep] = Field(default_factory=list)
@@ -133,6 +194,81 @@ def agent_endpoint(req: AgentRequest) -> dict:
     # Build trace from messages and scratchpad
     trace = _build_trace_from_state(state)
     
+    # Build structured plan steps
+    plan_steps = [
+        PlanStepInfo(
+            id=step.id,
+            type=step.type.value,
+            status=step.status,
+            params=step.params,
+            error_message=step.error.message if step.error else None,
+        )
+        for step in state.plan
+    ]
+    
+    # Build LLM call info
+    llm_calls = [
+        LLMCallInfo(
+            call_id=call.call_id,
+            schema_name=call.schema_name,
+            purpose=call.purpose,
+            latency_ms=call.latency_ms,
+            input_tokens=call.input_tokens,
+            output_tokens=call.output_tokens,
+            step_id=call.step_id,
+        )
+        for call in state.llm_calls
+    ]
+    
+    # Build data flow info
+    data_flow = []
+    for df_step in state.data_flow:
+        operations = []
+        for op in df_step.operations:
+            operations.append(OperationInfo(
+                id=op.id,
+                type=op.type.value,
+                name=op.name,
+                duration_ms=op.duration_ms,
+                inputs=[DataPreviewInfo(
+                    label=inp.label,
+                    type_name=inp.type_name,
+                    preview=inp.preview,
+                    size=inp.size,
+                ) for inp in op.inputs],
+                outputs=[DataPreviewInfo(
+                    label=out.label,
+                    type_name=out.type_name,
+                    preview=out.preview,
+                    size=out.size,
+                ) for out in op.outputs],
+                schema_name=op.schema_name,
+                input_tokens=op.input_tokens,
+                output_tokens=op.output_tokens,
+                error=op.error,
+            ))
+        
+        data_flow.append(DataFlowStepInfo(
+            step_id=df_step.step_id,
+            step_type=df_step.step_type,
+            step_name=df_step.step_name,
+            status=df_step.status,
+            total_duration_ms=df_step.total_duration_ms,
+            operations=operations,
+            step_input=DataPreviewInfo(
+                label=df_step.step_input.label,
+                type_name=df_step.step_input.type_name,
+                preview=df_step.step_input.preview,
+                size=df_step.step_input.size,
+            ) if df_step.step_input else None,
+            step_output=DataPreviewInfo(
+                label=df_step.step_output.label,
+                type_name=df_step.step_output.type_name,
+                preview=df_step.step_output.preview,
+                size=df_step.step_output.size,
+            ) if df_step.step_output else None,
+        ))
+    
     # Build response
     response = AgentResponse(
         status=state.status.value,
@@ -143,6 +279,9 @@ def agent_endpoint(req: AgentRequest) -> dict:
         scenarios_run=[s.model_dump() for s in state.scenarios_run],
         metrics_collected=[m.model_dump() for m in state.metrics_collected],
         plan_summary=state.get_plan_summary() if state.plan else None,
+        plan_steps=plan_steps,
+        llm_calls=llm_calls,
+        data_flow=data_flow,
         trace=trace,
         scratchpad=state.scratchpad,
     )

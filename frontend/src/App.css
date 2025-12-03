@@ -237,6 +237,15 @@
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
+/* Override for panels with their own dark backgrounds */
+.panel.pipeline-flow-panel,
+.panel.agent-panel,
+.panel.data-flow-panel {
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+
 .panel h2 {
   font-size: 18px;
   font-weight: 600;

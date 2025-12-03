@@ -1,0 +1,295 @@
+.pipeline-flow {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.pipeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.pipeline-header h3 {
+  margin: 0;
+  color: #e2e8f0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.pipeline-stats {
+  display: flex;
+  gap: 20px;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.stat-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #60a5fa;
+}
+
+.stat-label {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Pipeline steps container */
+.pipeline-steps {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 10px 0;
+}
+
+.pipeline-step-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 120px;
+}
+
+/* Individual step */
+.pipeline-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.pipeline-step:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.pipeline-step.step-done {
+  border-color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.pipeline-step.step-failed {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.pipeline-step.step-running {
+  border-color: #60a5fa;
+  background: rgba(96, 165, 250, 0.1);
+  animation: pulse 1.5s infinite;
+}
+
+.pipeline-step.step-skipped {
+  border-color: #6b7280;
+  background: rgba(107, 114, 128, 0.1);
+  opacity: 0.6;
+}
+
+.pipeline-step.step-pending {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(96, 165, 250, 0); }
+}
+
+.step-icon {
+  font-size: 1.5rem;
+  margin-bottom: 6px;
+}
+
+.step-content {
+  text-align: center;
+}
+
+.step-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 4px;
+}
+
+.step-status {
+  font-size: 0.65rem;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: center;
+}
+
+.status-indicator {
+  font-weight: bold;
+}
+
+.step-done .status-indicator { color: #22c55e; }
+.step-failed .status-indicator { color: #ef4444; }
+.step-running .status-indicator { color: #60a5fa; }
+
+.step-error {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: #ef4444;
+  color: white;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  cursor: help;
+}
+
+/* LLM calls under each step */
+.step-llm-calls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.llm-call-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: rgba(139, 92, 246, 0.2);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 6px;
+  font-size: 0.65rem;
+}
+
+.llm-call-badge.planning {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.llm-icon {
+  font-size: 0.8rem;
+}
+
+.llm-schema {
+  color: #c4b5fd;
+  font-weight: 500;
+}
+
+.llm-latency {
+  color: #94a3b8;
+  margin-left: auto;
+}
+
+/* Connector between steps */
+.pipeline-connector {
+  display: flex;
+  align-items: center;
+  margin: 0 -4px;
+  padding: 0 8px;
+}
+
+.connector-line {
+  width: 20px;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.3), rgba(255,255,255,0.1));
+}
+
+.connector-arrow {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 1rem;
+  margin-left: -4px;
+}
+
+/* Planning phase LLM calls */
+.planning-llm-calls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.planning-label {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+/* Detailed LLM calls section */
+.llm-calls-detail {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.llm-calls-detail h4 {
+  margin: 0 0 12px 0;
+  font-size: 0.85rem;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.llm-calls-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.llm-call-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  font-size: 0.75rem;
+}
+
+.call-number {
+  color: #6b7280;
+  font-weight: 600;
+  min-width: 24px;
+}
+
+.call-schema {
+  color: #c4b5fd;
+  font-weight: 600;
+  min-width: 120px;
+}
+
+.call-purpose {
+  color: #94a3b8;
+  flex: 1;
+}
+
+.call-latency {
+  color: #60a5fa;
+  font-weight: 500;
+  min-width: 60px;
+  text-align: right;
+}
+
+.call-tokens {
+  color: #6b7280;
+  font-size: 0.7rem;
+  min-width: 100px;
+  text-align: right;
+}
+

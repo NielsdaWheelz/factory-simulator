@@ -1,8 +1,7 @@
 .agent-trace {
-  background: #1a1a2e;
-  border-radius: 8px;
-  padding: 16px;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border-radius: 12px;
+  padding: 20px;
 }
 
 .trace-header {
@@ -11,240 +10,136 @@
   align-items: center;
   margin-bottom: 16px;
   padding-bottom: 12px;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .trace-header h3 {
   margin: 0;
-  color: #e0e0e0;
-  font-size: 1rem;
+  color: #e2e8f0;
+  font-size: 1.1rem;
   font-weight: 600;
 }
 
 .trace-header-controls {
   display: flex;
-  gap: 12px;
   align-items: center;
+  gap: 12px;
 }
 
 .status-badge {
-  padding: 4px 10px;
+  padding: 4px 12px;
   border-radius: 12px;
   font-size: 0.75rem;
   font-weight: 600;
-  text-transform: uppercase;
 }
 
 .status-done {
-  background: #1b4332;
-  color: #95d5b2;
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+  border: 1px solid rgba(34, 197, 94, 0.3);
 }
 
 .status-failed {
-  background: #4a1a1a;
-  color: #f87171;
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
 .status-max-steps {
-  background: #4a3c1a;
-  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fde047;
+  border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
 .status-running {
-  background: #1a3c4a;
-  color: #67e8f9;
+  background: rgba(96, 165, 250, 0.2);
+  color: #93c5fd;
+  border: 1px solid rgba(96, 165, 250, 0.3);
 }
 
 .steps-count {
-  color: #888;
+  color: #94a3b8;
   font-size: 0.8rem;
 }
 
 .expand-btn {
-  background: #2d2d44;
-  border: 1px solid #444;
-  color: #aaa;
-  padding: 4px 8px;
-  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: #e2e8f0;
   cursor: pointer;
-  font-size: 0.7rem;
-  transition: all 0.15s ease;
+  transition: all 0.2s;
 }
 
 .expand-btn:hover {
-  background: #3d3d54;
-  color: #fff;
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.3);
 }
 
-.trace-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.trace-step {
-  background: #16162a;
-  border: 1px solid #2a2a4a;
-  border-radius: 6px;
-  overflow: hidden;
-  transition: all 0.15s ease;
-}
-
-.trace-step:hover {
-  border-color: #3a3a5a;
-}
-
-.trace-step--failed {
-  border-color: #4a2a2a;
-}
-
-.trace-step-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.trace-step-header:hover {
-  background: #1e1e3a;
-}
-
-.step-number {
-  color: #666;
-  font-size: 0.75rem;
-  font-weight: 500;
-  min-width: 50px;
-}
-
-.step-action-icon {
-  font-size: 0.9rem;
-  width: 20px;
-  text-align: center;
-}
-
-.icon-success {
-  color: #4ade80;
-}
-
-.icon-failed {
-  color: #f87171;
-}
-
-.step-action-type {
-  color: #a78bfa;
-  font-weight: 600;
-  font-size: 0.85rem;
-  min-width: 140px;
-}
-
-.step-thought-preview {
-  color: #888;
-  font-size: 0.8rem;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.expand-icon {
-  color: #555;
-  font-size: 0.7rem;
-}
-
-.trace-step-details {
-  padding: 12px 14px;
-  background: #12121f;
-  border-top: 1px solid #2a2a4a;
-}
-
-.detail-section {
-  margin-bottom: 12px;
-}
-
-.detail-section:last-child {
-  margin-bottom: 0;
-}
-
-.detail-label {
-  color: #666;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 4px;
-}
-
-.detail-content {
-  color: #d0d0d0;
-  font-size: 0.85rem;
-  line-height: 1.5;
-}
-
-.thought-content {
-  color: #a0a0a0;
-  font-style: italic;
-}
-
-.tool-name {
-  color: #a78bfa;
-  font-weight: 600;
-}
-
-.code-block {
-  background: #0a0a14;
-  border: 1px solid #2a2a4a;
-  border-radius: 4px;
-  padding: 10px;
-  overflow-x: auto;
-  font-size: 0.75rem;
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.output-block {
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.error-content {
-  color: #f87171;
-  background: #2a1a1a;
-  padding: 8px;
-  border-radius: 4px;
-  font-size: 0.8rem;
-}
-
-.no-trace {
-  color: #666;
-  text-align: center;
-  padding: 24px;
-  font-style: italic;
-}
-
+/* Scratchpad section */
 .scratchpad-section {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid #333;
-}
-
-.scratchpad-section h4 {
-  color: #888;
-  font-size: 0.85rem;
-  margin: 0 0 10px 0;
-  font-weight: 500;
+  margin-top: 0;
 }
 
 .scratchpad-list {
-  margin: 0;
-  padding-left: 20px;
-  color: #777;
-  font-size: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .scratchpad-item {
-  margin-bottom: 6px;
-  line-height: 1.4;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  border-left: 3px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.2s;
 }
 
+.scratchpad-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.scratchpad-item.error {
+  border-left-color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.scratchpad-item.plan {
+  border-left-color: #60a5fa;
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.scratchpad-item.executing {
+  border-left-color: #22c55e;
+}
+
+.step-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #6b7280;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.thought-content {
+  flex: 1;
+  line-height: 1.5;
+}
+
+.no-trace {
+  color: #6b7280;
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 20px;
+}

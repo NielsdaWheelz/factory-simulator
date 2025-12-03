@@ -28,10 +28,12 @@ from .agent_types import (
     PlanResponse,
     ErrorType,
     ErrorInfo,
+    OperationType,
+    DataPreview,
 )
 from .agent_tools import ToolRegistry, create_default_registry
 from .models import FactoryConfig, ScenarioSpec, ScenarioType, ScenarioMetrics
-from .llm import call_llm_json
+from .llm import call_llm_json, call_llm_json_with_metadata
 from .config import OPENAI_MODEL
 
 logger = logging.getLogger(__name__)
@@ -144,8 +146,53 @@ Generate a plan for this request. Output ONLY valid JSON.
             PlanStep(id=0, type=PlanStepType.DIAGNOSTIC, params={"reason": "budget_exceeded"})
         ]
     
+    # Start tracking planning phase data flow
+    state.start_data_flow_step(
+        step_id=-1,
+        step_type="planning",
+        step_name="🎯 Planning Phase",
+        step_input=DataPreview(
+            label="user_request",
+            type_name="str",
+            preview=state.user_request[:100] + ("..." if len(state.user_request) > 100 else ""),
+            size=f"{len(state.user_request)} chars",
+        ),
+    )
+    
     try:
-        response = call_llm_json(prompt, PlanResponse)
+        result = call_llm_json_with_metadata(prompt, PlanResponse)
+        response = result.data
+        
+        # Record the LLM call for observability
+        state.record_llm_call(
+            schema_name="PlanResponse",
+            latency_ms=result.latency_ms,
+            purpose="Generate execution plan",
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+        )
+        
+        # Add LLM operation to data flow
+        state.add_operation(
+            op_type=OperationType.LLM,
+            name="generate_plan",
+            duration_ms=result.latency_ms,
+            inputs=[
+                DataPreview(label="prompt", type_name="str", preview="System prompt + user request", size=f"{len(prompt)} chars"),
+            ],
+            outputs=[
+                DataPreview(
+                    label="plan",
+                    type_name="PlanResponse",
+                    preview=f"[{', '.join(s.get('type', '?') for s in response.plan)}]",
+                    size=f"{len(response.plan)} steps",
+                ),
+            ],
+            schema_name="PlanResponse",
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+        )
+        
         logger.info(f"Planning LLM returned {len(response.plan)} steps")
         logger.debug(f"Planning reasoning: {response.reasoning}")
         
@@ -171,10 +218,22 @@ Generate a plan for this request. Output ONLY valid JSON.
             logger.warning("LLM returned empty plan, using canonical fallback")
             plan_steps = _get_canonical_plan(state)
         
+        # Finish planning data flow step
+        state.finish_data_flow_step(
+            status="done",
+            step_output=DataPreview(
+                label="plan",
+                type_name="list[PlanStep]",
+                preview=" → ".join(s.type.value for s in plan_steps),
+                size=f"{len(plan_steps)} steps",
+            ),
+        )
+        
         return plan_steps
         
     except Exception as e:
         logger.error(f"Planning LLM call failed: {e}")
+        state.finish_data_flow_step(status="failed")
         return _get_canonical_plan(state)
 
 
@@ -200,6 +259,19 @@ def _get_canonical_plan(state: AgentState) -> list[PlanStep]:
 # =============================================================================
 # STEP EXECUTION (Tiny Graph)
 # =============================================================================
+
+def _get_step_display_name(step_type: PlanStepType) -> str:
+    """Get human-readable name for a step type."""
+    names = {
+        PlanStepType.ENSURE_FACTORY: "📦 Parse Factory",
+        PlanStepType.SIMULATE_BASELINE: "🔄 Simulate Baseline",
+        PlanStepType.SIMULATE_RUSH: "🚀 Rush Scenario",
+        PlanStepType.SIMULATE_SLOWDOWN: "🐢 Slowdown Scenario",
+        PlanStepType.GENERATE_BRIEFING: "📝 Generate Briefing",
+        PlanStepType.DIAGNOSTIC: "🔍 Diagnostic",
+    }
+    return names.get(step_type, step_type.value)
+
 
 def _execute_ensure_factory(state: AgentState, step: PlanStep, registry: ToolRegistry) -> Optional[ErrorInfo]:
     """Execute ENSURE_FACTORY step."""
@@ -516,13 +588,76 @@ def run_agent(user_request: str, max_steps: int = 15, llm_budget: int = 10) -> A
         state.add_thought(f"Executing: {step.type.value}")
         logger.info(f"Executing step {step.id}: {step.type.value}")
         
+        # Start data flow tracking for this step
+        step_input = None
+        if step.type == PlanStepType.ENSURE_FACTORY:
+            text = state.factory_text or state.user_request
+            step_input = DataPreview(
+                label="factory_text",
+                type_name="str",
+                preview=text[:80] + ("..." if len(text) > 80 else ""),
+                size=f"{len(text)} chars",
+            )
+        elif step.type in (PlanStepType.SIMULATE_BASELINE, PlanStepType.SIMULATE_RUSH, PlanStepType.SIMULATE_SLOWDOWN):
+            if state.factory:
+                step_input = DataPreview(
+                    label="factory",
+                    type_name="FactoryConfig",
+                    preview=f"machines: {[m.id for m in state.factory.machines]}",
+                    size=f"{len(state.factory.machines)} machines, {len(state.factory.jobs)} jobs",
+                )
+        elif step.type == PlanStepType.GENERATE_BRIEFING:
+            if state.metrics_collected:
+                m = state.metrics_collected[0]
+                step_input = DataPreview(
+                    label="metrics",
+                    type_name="ScenarioMetrics",
+                    preview=f"makespan={m.makespan_hour}h, bottleneck={m.bottleneck_machine_id}",
+                    size=f"{len(state.metrics_collected)} scenarios",
+                )
+        
+        state.start_data_flow_step(
+            step_id=step.id,
+            step_type=step.type.value,
+            step_name=_get_step_display_name(step.type),
+            step_input=step_input,
+        )
+        
         error = _execute_plan_step(state, step, registry)
         
         if error is None:
             state.mark_plan_step_done(step.id)
             state.record_success()
             logger.info(f"Step {step.id} completed successfully")
+            
+            # Determine step output
+            step_output = None
+            if step.type == PlanStepType.ENSURE_FACTORY and state.factory:
+                step_output = DataPreview(
+                    label="factory",
+                    type_name="FactoryConfig",
+                    preview=f"machines: {[m.id for m in state.factory.machines]}, jobs: {[j.id for j in state.factory.jobs]}",
+                    size=f"{len(state.factory.machines)} machines, {len(state.factory.jobs)} jobs",
+                )
+            elif step.type in (PlanStepType.SIMULATE_BASELINE, PlanStepType.SIMULATE_RUSH, PlanStepType.SIMULATE_SLOWDOWN) and state.metrics_collected:
+                m = state.metrics_collected[-1]
+                step_output = DataPreview(
+                    label="metrics",
+                    type_name="ScenarioMetrics",
+                    preview=f"makespan={m.makespan_hour}h, bottleneck={m.bottleneck_machine_id} ({m.bottleneck_utilization:.0%})",
+                    size=None,
+                )
+            elif step.type == PlanStepType.GENERATE_BRIEFING and state.final_answer:
+                step_output = DataPreview(
+                    label="briefing",
+                    type_name="str",
+                    preview=state.final_answer[:80] + ("..." if len(state.final_answer) > 80 else ""),
+                    size=f"{len(state.final_answer)} chars",
+                )
+            
+            state.finish_data_flow_step(status="done", step_output=step_output)
         else:
+            state.finish_data_flow_step(status="failed")
             _handle_error(state, step, error)
             if state.status != AgentStatus.RUNNING:
                 break

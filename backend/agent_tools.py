@@ -10,6 +10,7 @@ Tools are the agent's "hands" - discrete, well-defined actions it can choose fro
 
 import json
 import logging
+import time
 import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Type
@@ -23,6 +24,8 @@ from .agent_types import (
     FactoryRouting,
     FactoryParameters,
     FactoryValidationReport,
+    OperationType,
+    DataPreview,
 )
 from .models import FactoryConfig, ScenarioSpec, ScenarioType, ScenarioMetrics, Machine, Job, Step
 from .world import build_toy_factory
@@ -193,21 +196,120 @@ class ParseFactoryTool(Tool):
         factory_text = args["description"]
         
         try:
-            # Stage 0: Extract explicit IDs
+            # Stage 0: Extract explicit IDs (no LLM)
+            t0 = time.time()
             ids = extract_explicit_ids(factory_text)
+            latency_ids = int((time.time() - t0) * 1000)
             logger.debug(f"Extracted IDs: {len(ids.machine_ids)} machines, {len(ids.job_ids)} jobs")
             
-            # Stage 1: Extract coarse structure
+            # Track operation
+            state.add_operation(
+                op_type=OperationType.FUNCTION,
+                name="extract_explicit_ids",
+                duration_ms=latency_ids,
+                inputs=[DataPreview(label="factory_text", type_name="str", preview=factory_text[:60] + "...", size=f"{len(factory_text)} chars")],
+                outputs=[DataPreview(
+                    label="ids",
+                    type_name="ExplicitIds",
+                    preview=f"machines: {list(ids.machine_ids)}, jobs: {list(ids.job_ids)}",
+                    size=f"{len(ids.machine_ids)} machines, {len(ids.job_ids)} jobs",
+                )],
+            )
+            
+            # Stage 1: Extract coarse structure (LLM call)
+            t0 = time.time()
             coarse = extract_coarse_structure(factory_text, ids)
+            latency_coarse = int((time.time() - t0) * 1000)
+            state.record_llm_call(
+                schema_name="CoarseStructure",
+                latency_ms=latency_coarse,
+                purpose="Extract machines and jobs from description",
+            )
             
-            # Stage 2: Extract steps and timings
+            # Track LLM operation
+            state.add_operation(
+                op_type=OperationType.LLM,
+                name="extract_coarse_structure",
+                duration_ms=latency_coarse,
+                inputs=[
+                    DataPreview(label="factory_text", type_name="str", preview="...", size=f"{len(factory_text)} chars"),
+                    DataPreview(label="explicit_ids", type_name="ExplicitIds", preview=f"{len(ids.machine_ids)}M, {len(ids.job_ids)}J", size=None),
+                ],
+                outputs=[DataPreview(
+                    label="coarse",
+                    type_name="CoarseStructure",
+                    preview=f"machines: {[m.id for m in coarse.machines]}, jobs: {[j.id for j in coarse.jobs]}",
+                    size=f"{len(coarse.machines)} machines, {len(coarse.jobs)} jobs",
+                )],
+                schema_name="CoarseStructure",
+            )
+            
+            # Stage 2: Extract steps and timings (LLM call)
+            t0 = time.time()
             raw = extract_steps(factory_text, coarse)
+            latency_steps = int((time.time() - t0) * 1000)
+            state.record_llm_call(
+                schema_name="RawFactoryConfig",
+                latency_ms=latency_steps,
+                purpose="Extract job routing and processing times",
+            )
             
-            # Stage 3: Validate and normalize
+            # Track LLM operation
+            state.add_operation(
+                op_type=OperationType.LLM,
+                name="extract_steps",
+                duration_ms=latency_steps,
+                inputs=[
+                    DataPreview(label="factory_text", type_name="str", preview="...", size=f"{len(factory_text)} chars"),
+                    DataPreview(label="coarse", type_name="CoarseStructure", preview=f"{len(coarse.machines)}M, {len(coarse.jobs)}J", size=None),
+                ],
+                outputs=[DataPreview(
+                    label="raw",
+                    type_name="RawFactoryConfig",
+                    preview=f"jobs with steps: {[j.id for j in raw.jobs]}",
+                    size=f"{sum(len(j.steps) for j in raw.jobs)} total steps",
+                )],
+                schema_name="RawFactoryConfig",
+            )
+            
+            # Stage 3: Validate and normalize (no LLM)
+            t0 = time.time()
             factory = validate_and_normalize(raw)
+            latency_validate = int((time.time() - t0) * 1000)
             
-            # Stage 4: Assess coverage
+            state.add_operation(
+                op_type=OperationType.VALIDATION,
+                name="validate_and_normalize",
+                duration_ms=latency_validate,
+                inputs=[DataPreview(label="raw", type_name="RawFactoryConfig", preview="...", size=None)],
+                outputs=[DataPreview(
+                    label="factory",
+                    type_name="FactoryConfig",
+                    preview=f"machines: {[m.id for m in factory.machines]}, jobs: {[j.id for j in factory.jobs]}",
+                    size=f"{len(factory.machines)} machines, {len(factory.jobs)} jobs",
+                )],
+            )
+            
+            # Stage 4: Assess coverage (no LLM)
+            t0 = time.time()
             coverage = assess_coverage(ids, factory)
+            latency_coverage = int((time.time() - t0) * 1000)
+            
+            state.add_operation(
+                op_type=OperationType.VALIDATION,
+                name="assess_coverage",
+                duration_ms=latency_coverage,
+                inputs=[
+                    DataPreview(label="explicit_ids", type_name="ExplicitIds", preview="...", size=None),
+                    DataPreview(label="factory", type_name="FactoryConfig", preview="...", size=None),
+                ],
+                outputs=[DataPreview(
+                    label="coverage",
+                    type_name="CoverageReport",
+                    preview=f"machines: {coverage.machine_coverage:.0%}, jobs: {coverage.job_coverage:.0%}",
+                    size=f"missing: {len(coverage.missing_machines)}M, {len(coverage.missing_jobs)}J" if coverage.missing_machines or coverage.missing_jobs else "complete",
+                )],
+            )
             
             if coverage.machine_coverage < 1.0 or coverage.job_coverage < 1.0:
                 return ToolResult(
@@ -389,8 +491,47 @@ class SimulateScenarioTool(Tool):
         
         # Run simulation
         try:
+            t0 = time.time()
             result = simulate(state.factory, spec)
+            latency_sim = int((time.time() - t0) * 1000)
+            
+            # Track simulate operation
+            state.add_operation(
+                op_type=OperationType.FUNCTION,
+                name="simulate",
+                duration_ms=latency_sim,
+                inputs=[
+                    DataPreview(label="factory", type_name="FactoryConfig", preview=f"{len(state.factory.machines)}M, {len(state.factory.jobs)}J", size=None),
+                    DataPreview(label="spec", type_name="ScenarioSpec", preview=f"{spec.scenario_type.value}", size=None),
+                ],
+                outputs=[DataPreview(
+                    label="result",
+                    type_name="SimulationResult",
+                    preview=f"makespan={result.makespan_hour}h, {len(result.scheduled_steps)} scheduled steps",
+                    size=None,
+                )],
+            )
+            
+            t0 = time.time()
             metrics = compute_metrics(state.factory, result)
+            latency_metrics = int((time.time() - t0) * 1000)
+            
+            # Track compute_metrics operation
+            state.add_operation(
+                op_type=OperationType.FUNCTION,
+                name="compute_metrics",
+                duration_ms=latency_metrics,
+                inputs=[
+                    DataPreview(label="factory", type_name="FactoryConfig", preview="...", size=None),
+                    DataPreview(label="sim_result", type_name="SimulationResult", preview=f"makespan={result.makespan_hour}h", size=None),
+                ],
+                outputs=[DataPreview(
+                    label="metrics",
+                    type_name="ScenarioMetrics",
+                    preview=f"makespan={metrics.makespan_hour}h, bottleneck={metrics.bottleneck_machine_id} ({metrics.bottleneck_utilization:.0%})",
+                    size=None,
+                )],
+            )
             
             # Format output
             late_jobs = {k: v for k, v in metrics.job_lateness.items() if v > 0}
@@ -658,15 +799,40 @@ class GenerateBriefingTool(Tool):
             if focus:
                 context += f"\n\nFocus area requested: {focus}"
             
-            # Use BriefingAgent to generate the report
+            # Use BriefingAgent to generate the report (includes LLM call)
             agent = BriefingAgent()
             primary_metrics = state.metrics_collected[0]  # Use first scenario as primary
             
+            t0 = time.time()
             briefing = agent.run(
                 primary_metrics,
                 context=context,
                 intent_context=f"User request: {state.user_request}",
                 futures_context=f"Analyzed {len(state.scenarios_run)} scenarios",
+            )
+            latency_briefing = int((time.time() - t0) * 1000)
+            state.record_llm_call(
+                schema_name="BriefingResponse",
+                latency_ms=latency_briefing,
+                purpose="Generate executive briefing with recommendations",
+            )
+            
+            # Track LLM operation
+            state.add_operation(
+                op_type=OperationType.LLM,
+                name="generate_briefing",
+                duration_ms=latency_briefing,
+                inputs=[
+                    DataPreview(label="metrics", type_name="ScenarioMetrics", preview=f"{len(state.metrics_collected)} scenarios", size=None),
+                    DataPreview(label="context", type_name="str", preview=context[:60] + "...", size=f"{len(context)} chars"),
+                ],
+                outputs=[DataPreview(
+                    label="briefing",
+                    type_name="str",
+                    preview=briefing[:80] + "..." if len(briefing) > 80 else briefing,
+                    size=f"{len(briefing)} chars",
+                )],
+                schema_name="BriefingResponse",
             )
             
             return ToolResult(
