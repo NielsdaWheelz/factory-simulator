@@ -1593,6 +1593,90 @@ def run_multi_pass_onboarding(
     return result
 
 
+def generate_clarifying_questions(
+    primary: FactoryConfig,
+    alternatives: list[FactoryConfig],
+    diffs: list[FactoryDiff],
+    modes: list[str],
+) -> list[str]:
+    """
+    Generate targeted clarifying questions from structural differences between configs.
+
+    Looks at diffs between primary and alternative configs and produces human-readable
+    questions about divergence points. Focuses on:
+    - routing_differences: Different machine sequences for the same job
+    - machines_added/removed: Machines present in one config but not another
+    - jobs_added/removed: Jobs present in one config but not another
+    - timing_differences: Different due times or durations
+
+    This is a demo-quality function using template-based generation.
+
+    Args:
+        primary: The primary/reference factory config
+        alternatives: List of alternative factory configs
+        diffs: List of FactoryDiff objects (one per alternative)
+        modes: Extraction modes that produced each alternative
+
+    Returns:
+        List of human-readable questions (max 5 for demo purposes)
+    """
+    questions = []
+
+    for i, (diff, mode) in enumerate(zip(diffs, modes)):
+        if diff.is_identical:
+            continue  # No questions if configs are identical
+
+        # Priority 1: Routing differences (most interesting for demo)
+        for job_id, routes in diff.routing_differences.items():
+            route_a = " → ".join(routes["a"])
+            route_b = " → ".join(routes["b"])
+            questions.append(
+                f"Job {job_id} routing differs: Config A routes {route_a}, "
+                f"Config B ({mode} mode) routes {route_b}. Which path is correct?"
+            )
+
+        # Priority 2: Machine differences
+        if diff.machines_added:
+            machines_str = ", ".join(diff.machines_added)
+            questions.append(
+                f"Machine(s) {machines_str} appear in Config B ({mode} mode) but not Config A. "
+                f"Were these explicitly mentioned?"
+            )
+
+        if diff.machines_removed:
+            machines_str = ", ".join(diff.machines_removed)
+            questions.append(
+                f"Machine(s) {machines_str} appear in Config A but not Config B ({mode} mode). "
+                f"Are these required or optional?"
+            )
+
+        # Priority 3: Job differences
+        if diff.jobs_added:
+            jobs_str = ", ".join(diff.jobs_added)
+            questions.append(
+                f"Job(s) {jobs_str} appear in Config B ({mode} mode) but not Config A. "
+                f"Were these explicitly mentioned?"
+            )
+
+        if diff.jobs_removed:
+            jobs_str = ", ".join(diff.jobs_removed)
+            questions.append(
+                f"Job(s) {jobs_str} appear in Config A but not Config B ({mode} mode). "
+                f"Should these be included?"
+            )
+
+        # Priority 4: Timing differences
+        for job_id, timing in diff.timing_differences.items():
+            if "due_a" in timing and "due_b" in timing:
+                questions.append(
+                    f"Job {job_id} due time differs: Config A says {timing['due_a']}h, "
+                    f"Config B ({mode} mode) says {timing['due_b']}h. Which deadline applies?"
+                )
+
+    # Limit to 5 questions max for demo purposes
+    return questions[:5]
+
+
 def estimate_onboarding_coverage(factory_text: str, factory: FactoryConfig) -> list[str]:
     """
     Inspect raw factory text for explicit machine/job IDs and compare to parsed factory.

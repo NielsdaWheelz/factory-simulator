@@ -155,41 +155,56 @@ class DiffSummaryInfo(BaseModel):
     summary: str  # Human-readable summary of differences
 
 
+class DiffDetailInfo(BaseModel):
+    """Detailed structural diff between primary and an alternative config."""
+    machines_added: list[str] = Field(default_factory=list)
+    machines_removed: list[str] = Field(default_factory=list)
+    jobs_added: list[str] = Field(default_factory=list)
+    jobs_removed: list[str] = Field(default_factory=list)
+    routing_differences: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
+    timing_differences: dict[str, dict[str, int]] = Field(default_factory=dict)
+    is_identical: bool = Field(default=True)
+
+
 class AgentResponse(BaseModel):
     """Response from the agent endpoint."""
-    
+
     status: str = Field(..., description="Agent completion status: DONE, FAILED, MAX_STEPS, BUDGET_EXCEEDED")
     steps_taken: int
     llm_calls_used: int
     final_answer: Optional[str] = None
-    
+
     # Domain results (if available)
     factory: Optional[dict] = None
     scenarios_run: list[dict] = Field(default_factory=list)
     metrics_collected: list[dict] = Field(default_factory=list)
-    
+
     # Plan information (structured for visualization)
     plan_summary: Optional[str] = None
     plan_steps: list[PlanStepInfo] = Field(default_factory=list)
-    
+
     # LLM call tracking (for observability)
     llm_calls: list[LLMCallInfo] = Field(default_factory=list)
-    
+
     # Data flow visualization
     data_flow: list[DataFlowStepInfo] = Field(default_factory=list)
-    
+
     # The execution trace (for debugging/observability)
     trace: list[AgentTraceStep] = Field(default_factory=list)
     scratchpad: list[str] = Field(default_factory=list)
-    
+
     # Onboarding diagnostics (for robust onboarding)
     onboarding_issues: list[OnboardingIssueInfo] = Field(default_factory=list)
     onboarding_score: Optional[int] = None
     onboarding_trust: Optional[str] = None
-    
+
     # Alternative factory interpretations (PR9)
     alt_factories: list[AltFactoryInfo] = Field(default_factory=list)
     diff_summaries: list[DiffSummaryInfo] = Field(default_factory=list)
+
+    # Structured diffs and clarifying questions (PR10)
+    alt_factory_diffs: list[DiffDetailInfo] = Field(default_factory=list)
+    clarifying_questions: list[str] = Field(default_factory=list)
 
 
 # =============================================================================
@@ -330,7 +345,21 @@ def agent_endpoint(req: AgentRequest) -> dict:
         )
         for i, summary in enumerate(state.diff_summaries)
     ]
-    
+
+    # Build detailed diffs info (PR10)
+    alt_factory_diffs = [
+        DiffDetailInfo(
+            machines_added=diff.machines_added,
+            machines_removed=diff.machines_removed,
+            jobs_added=diff.jobs_added,
+            jobs_removed=diff.jobs_removed,
+            routing_differences=diff.routing_differences,
+            timing_differences=diff.timing_differences,
+            is_identical=diff.is_identical,
+        )
+        for diff in state.alt_factory_diffs
+    ]
+
     # Build response
     response = AgentResponse(
         status=state.status.value,
@@ -351,6 +380,8 @@ def agent_endpoint(req: AgentRequest) -> dict:
         onboarding_trust=state.onboarding_trust,
         alt_factories=alt_factories,
         diff_summaries=diff_summaries_info,
+        alt_factory_diffs=alt_factory_diffs,
+        clarifying_questions=state.clarifying_questions,
     )
     
     logger.info("=" * 80)
