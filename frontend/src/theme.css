@@ -1,0 +1,289 @@
+/* ========================================
+   Design System / Theme Variables
+   ======================================== */
+
+:root {
+  /* Neutrals */
+  --bg-app: #f4f5f7;
+  --bg-surface: #ffffff;
+  --bg-canvas: #fbfcff;
+  --border-subtle: #dde1e7;
+  --border-strong: #c0c5d0;
+  --text-main: #1f2933;
+  --text-muted: #6b7280;
+
+  /* Primary accent */
+  --accent-primary: #2563eb;
+  --accent-primary-hover: #1d4ed8;
+
+  /* Status colors */
+  --status-success-bg: #e6f4ea;
+  --status-success-text: #166534;
+  --status-success-border: #9ae6b4;
+
+  --status-warning-bg: #fff7e0;
+  --status-warning-text: #92400e;
+  --status-warning-border: #fed7aa;
+
+  --status-error-bg: #fee2e2;
+  --status-error-text: #b91c1c;
+  --status-error-border: #fecaca;
+
+  --status-info-bg: #e0f2fe;
+  --status-info-text: #0c4a6e;
+  --status-info-border: #bae6fd;
+
+  /* Category colors (for node types) */
+  --cat-source: #059669;
+  --cat-buffer: #6b7280;
+  --cat-process: #06b6d4;
+  --cat-router: #b45309;
+  --cat-separator: #eab308;
+  --cat-combiner: #ec4899;
+  --cat-sink: #dc2626;
+  --cat-model: #111827;
+
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* Shadows */
+  --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.08);
+
+  /* Typography */
+  --font-size-title: 24px;
+  --font-size-h2: 18px;
+  --font-size-h3: 15px;
+  --font-size-body: 14px;
+  --font-size-caption: 12px;
+  --line-height-body: 1.5;
+}
+
+/* ========================================
+   Shared Component Styles
+   ======================================== */
+
+/* Panel / Card */
+.panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-card);
+}
+
+.panel-title {
+  font-size: var(--font-size-h2);
+  font-weight: 600;
+  color: var(--text-main);
+  margin: 0 0 var(--space-3) 0;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Alerts / Banners */
+.alert {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
+.alert--success {
+  background: var(--status-success-bg);
+  color: var(--status-success-text);
+  border-color: var(--status-success-border);
+}
+
+.alert--warning {
+  background: var(--status-warning-bg);
+  color: var(--status-warning-text);
+  border-color: var(--status-warning-border);
+}
+
+.alert--error {
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
+  border-color: var(--status-error-border);
+}
+
+.alert--info {
+  background: var(--status-info-bg);
+  color: var(--status-info-text);
+  border-color: var(--status-info-border);
+}
+
+/* Buttons */
+.btn {
+  padding: 10px 20px;
+  font-size: var(--font-size-body);
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+  font-family: inherit;
+}
+
+.btn-primary {
+  background-color: var(--accent-primary);
+  color: white;
+  border: none;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--accent-primary-hover);
+}
+
+.btn-primary:disabled {
+  background-color: var(--border-strong);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+}
+
+.btn-ghost:hover {
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--text-main);
+  border-color: var(--border-strong);
+}
+
+/* Badges / Pills */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: var(--font-size-caption);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge--status-success {
+  background: var(--status-success-bg);
+  color: var(--status-success-text);
+}
+
+.badge--status-warning {
+  background: var(--status-warning-bg);
+  color: var(--status-warning-text);
+}
+
+.badge--status-error {
+  background: var(--status-error-bg);
+  color: var(--status-error-text);
+}
+
+.badge--category {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+}
+
+/* Tables */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-body);
+}
+
+.table thead {
+  background-color: #f9fafb;
+  border-bottom: 2px solid var(--border-subtle);
+}
+
+.table th {
+  padding: var(--space-3);
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.table td {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-main);
+}
+
+.table tbody tr:hover {
+  background-color: #f9fafb;
+}
+
+/* Input fields */
+.input,
+.textarea {
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-body);
+  font-family: inherit;
+  line-height: var(--line-height-body);
+  color: var(--text-main);
+  background: var(--bg-surface);
+  width: 100%;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.input:focus,
+.textarea:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+/* Form groups */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.form-group label {
+  font-weight: 600;
+  font-size: var(--font-size-body);
+  color: var(--text-main);
+}
+
+/* Empty state */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.empty-state-title {
+  font-size: var(--font-size-h2);
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: var(--space-2);
+}
+
+.empty-state-description {
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
