@@ -132,6 +132,29 @@ export interface DataFlowStepInfo {
 
 export type AgentStatus = 'RUNNING' | 'DONE' | 'FAILED' | 'MAX_STEPS' | 'BUDGET_EXCEEDED';
 
+export interface OnboardingIssueInfo {
+  type: string;
+  severity: string;
+  message: string;
+  related_ids?: string[] | null;
+}
+
+export type OnboardingTrust = 'HIGH_TRUST' | 'MEDIUM_TRUST' | 'LOW_TRUST';
+
+// Alternative factory interpretation (PR9)
+export interface AltFactoryInfo {
+  machines: string[];  // Just machine IDs
+  jobs: string[];  // Just job IDs
+  mode: string;  // Extraction mode that produced this config
+}
+
+// Diff summary between primary and alternative config (PR9)
+export interface DiffSummaryInfo {
+  alt_index: number;  // Index of the alternative (0-based)
+  mode: string;  // Extraction mode that produced the alternative
+  summary: string;  // Human-readable summary of differences
+}
+
 export interface AgentResponse {
   status: AgentStatus;
   steps_taken: number;
@@ -156,6 +179,15 @@ export interface AgentResponse {
   // Execution trace
   trace: AgentTraceStep[];
   scratchpad: string[];
+  
+  // Onboarding diagnostics
+  onboarding_issues: OnboardingIssueInfo[];
+  onboarding_score: number | null;
+  onboarding_trust: OnboardingTrust | null;
+  
+  // Alternative factory interpretations (PR9)
+  alt_factories: AltFactoryInfo[];
+  diff_summaries: DiffSummaryInfo[];
 }
 
 const DEFAULT_API_BASE_URL = 'http://localhost:8000';

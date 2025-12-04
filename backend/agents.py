@@ -1072,6 +1072,9 @@ class BriefingAgent:
 
     Enhanced for PR5: Now includes feasibility assessment against user constraints
     and explicit conflict detection.
+    
+    Enhanced for PR6: Now includes onboarding diagnostics context and generates
+    clarifying questions when onboarding issues are present.
     """
 
     def run(
@@ -1080,6 +1083,8 @@ class BriefingAgent:
         context: str | None = None,
         intent_context: str | None = None,
         futures_context: str | None = None,
+        onboarding_context: str | None = None,
+        factory: "FactoryConfig | None" = None,
     ) -> str:
         """
         Generate a markdown briefing from metrics using an LLM.
@@ -1091,6 +1096,8 @@ class BriefingAgent:
             context: Optional summary of other scenarios and their metrics
             intent_context: Optional explanation from IntentAgent (includes user constraints)
             futures_context: Optional justification from FuturesAgent (why these scenarios were chosen)
+            onboarding_context: Optional summary of onboarding diagnostics (issues, score, trust level)
+            factory: Optional FactoryConfig for context (uses toy factory if not provided)
 
         Returns:
             Markdown string briefing
@@ -1098,8 +1105,9 @@ class BriefingAgent:
         logger.debug(f"BriefingAgent.run: Received metrics for briefing (makespan={metrics.makespan_hour}h)")
 
         try:
-            # Build factory summary
-            factory = build_toy_factory()
+            # Build factory summary - use provided factory or fall back to toy
+            if factory is None:
+                factory = build_toy_factory()
 
             job_summary = ", ".join([f"{j.id} ({j.name})" for j in factory.jobs])
             machine_summary = ", ".join([f"{m.id} ({m.name})" for m in factory.machines])
@@ -1122,40 +1130,93 @@ Job Lateness: {dict(metrics.job_lateness)}"""
             if futures_context:
                 futures_str = f"\n# Scenario Selection Reasoning\n{futures_context}"
 
+            onboarding_str = ""
+            if onboarding_context:
+                onboarding_str = f"\n# Onboarding Diagnostics\n{onboarding_context}"
+
+            # Determine if we need onboarding sections based on whether context was provided
+            has_onboarding_issues = onboarding_context is not None and len(onboarding_context.strip()) > 0
+
+            # Build schema dynamically based on whether onboarding issues exist
+            if has_onboarding_issues:
+                schema_example = (
+                    "# Factory Analysis Report\\n\\n"
+                    "## Today at a Glance\\n"
+                    "[1-2 sentences summarizing the main finding or recommendation]\\n\\n"
+                    "## Onboarding Issues\\n"
+                    "[Summary of issues detected during factory parsing. List each issue with its severity. "
+                    "Explain what each issue means for the reliability of this analysis.]\\n\\n"
+                    "## Clarifying Questions\\n"
+                    "[2-5 specific questions aimed at resolving ambiguities or conflicts detected during onboarding. "
+                    "Questions should reference specific machines/jobs and be answerable by the user. "
+                    "End with: 'Update your factory description or clarifications box with answers and rerun.']\\n\\n"
+                    "## Feasibility Assessment\\n"
+                    "[If constraints were mentioned, state whether they can be met.]\\n\\n"
+                    "## Key Risks\\n"
+                    "[3-5 bullet points on lateness, bottlenecks, utilization]\\n\\n"
+                    "## Recommended Actions\\n"
+                    "[2-4 bullet points with concrete steps]\\n\\n"
+                    "## Limitations of This Model\\n"
+                    "[2-3 sentences on scope and limitations]"
+                )
+                onboarding_instructions = """
+# Critical Instructions: Onboarding Issues and Clarifying Questions
+When onboarding diagnostics are provided:
+1. ALWAYS include an "Onboarding Issues" section summarizing issues by severity
+2. ALWAYS include a "Clarifying Questions" section with 2-5 SPECIFIC questions
+3. Questions must:
+   - Reference specific machine/job IDs when possible
+   - Be answerable by someone who knows the factory
+   - Help resolve the detected ambiguities/conflicts
+   - End with explicit instruction to update description and rerun
+4. If trust level is LOW_TRUST or MEDIUM_TRUST, emphasize that results may change after clarification
+"""
+            else:
+                schema_example = (
+                    "# Factory Analysis Report\\n\\n"
+                    "## Today at a Glance\\n"
+                    "[1-2 sentences summarizing the main risk or recommendation]\\n\\n"
+                    "## Feasibility Assessment\\n"
+                    "[If constraints were mentioned, state whether they can be met.]\\n\\n"
+                    "## Key Risks\\n"
+                    "[3-5 bullet points on lateness, bottlenecks, utilization]\\n\\n"
+                    "## Recommended Actions\\n"
+                    "[2-4 bullet points with concrete steps]\\n\\n"
+                    "## Limitations of This Model\\n"
+                    "[2-3 sentences on scope and limitations]"
+                )
+                onboarding_instructions = ""
+
             prompt = f"""You are a factory operations briefing writer. Your job is to translate
-simulation metrics into a clear, actionable morning briefing for a plant manager.
+simulation metrics into a clear, actionable report for a plant manager.
 
 Use ONLY the data provided. Do not invent jobs, machines, or scenarios.
 You will output ONLY valid JSON matching the schema below. Do not add explanation or prose.
-
+{onboarding_instructions}
 # Critical Instructions: Constraint & Feasibility Analysis
 When reviewing the scenarios and metrics, explicitly:
 1. Identify any user constraints mentioned (e.g., "no lateness", "must finish by 6pm", "rush J2")
 2. Compare these constraints against the actual metrics:
-   - If user requested impossible targets (e.g., makespan ≤ 6h but all scenarios are ≥ 9h, or "no late jobs" but scenario shows lateness):
-     * Clearly state that the constraint cannot be met
-     * Explain why (e.g., "M2 is a bottleneck; all three jobs need 6h of M2 time, but M2 is only available 24h/day")
-     * Show the "best achievable" alternative
+   - If user requested impossible targets, clearly state they cannot be met and explain why
    - If some scenarios meet constraints better than others, highlight which is closest
-   - Always be honest about what the metrics show, even if it conflicts with user expectations
-3. Structure your response with a dedicated "Feasibility Assessment" section that addresses constraints explicitly
-4. If there are NO constraints mentioned, still provide the standard briefing structure
+   - Always be honest about what the metrics show
+3. If there are NO constraints mentioned, you may skip or briefly note this
 
 # FactoryConfig Summary
 Jobs: {job_summary}
 Machines: {machine_summary}
 
 # Primary Scenario Metrics
-{metrics_summary}{intent_str}{futures_str}{context_str}
+{metrics_summary}{intent_str}{futures_str}{context_str}{onboarding_str}
 
 # Schema
 {{
-  "markdown": "# Morning Briefing\n\n## Today at a Glance\n[1-2 sentences summarizing the main risk, constraint feasibility, or recommendation]\n\n## Feasibility Assessment\n[If constraints were mentioned by user, state whether they can be met. If impossible, explain why and what is best achievable. If no constraints, you may skip this section or note 'No explicit constraints mentioned.']\n\n## Key Risks\n[3-5 bullet points on lateness, bottlenecks, utilization, and any constraint violations]\n\n## Recommended Actions\n[2-4 bullet points with concrete, actionable steps]\n\n## Limitations of This Model\n[2-3 sentences on scope and limitations of this deterministic model]"
+  "markdown": "{schema_example}"
 }}
 
 # Respond with ONLY the JSON object, no explanation."""
 
-            logger.debug(f"BriefingAgent: Calling LLM with intent_context={bool(intent_context)}, futures_context={bool(futures_context)}")
+            logger.debug(f"BriefingAgent: Calling LLM with intent_context={bool(intent_context)}, futures_context={bool(futures_context)}, onboarding_context={bool(onboarding_context)}")
             response = call_llm_json(prompt, BriefingResponse)
             logger.info(f"BriefingAgent: Generated briefing ({len(response.markdown)} chars)")
             return response.markdown
@@ -1163,33 +1224,66 @@ Machines: {machine_summary}
         except Exception as e:
             # Fallback to deterministic template on error
             logger.warning("BriefingAgent LLM failed; using deterministic fallback: %s", e)
-            lines = [
-                "# Morning Briefing",
-                "",
-                "## Today at a Glance",
-                f"Makespan: {metrics.makespan_hour} hours. Bottleneck: {metrics.bottleneck_machine_id}.",
-                "",
-            ]
+            return self._build_fallback_briefing(
+                metrics=metrics,
+                intent_context=intent_context,
+                onboarding_context=onboarding_context,
+            )
 
-            # Add user intent if available
-            if intent_context:
-                lines.extend([
-                    "## Feasibility Assessment",
-                    f"{intent_context}",
-                    "",
-                ])
+    def _build_fallback_briefing(
+        self,
+        metrics: ScenarioMetrics,
+        intent_context: str | None = None,
+        onboarding_context: str | None = None,
+    ) -> str:
+        """Build a deterministic fallback briefing when LLM fails."""
+        lines = [
+            "# Factory Analysis Report",
+            "",
+            "## Today at a Glance",
+            f"Makespan: {metrics.makespan_hour} hours. Bottleneck: {metrics.bottleneck_machine_id}.",
+            "",
+        ]
 
+        # Add onboarding issues section if we have onboarding context
+        if onboarding_context:
             lines.extend([
-                "## Key Risks",
-                f"- {metrics.bottleneck_machine_id} is bottleneck at {metrics.bottleneck_utilization:.0%} utilization",
-                f"- Late jobs: {[k for k, v in metrics.job_lateness.items() if v > 0] or 'none'}",
+                "## Onboarding Issues",
                 "",
-                "## Recommended Actions",
-                "- Monitor bottleneck machine closely.",
-                "- Review job scheduling priorities.",
+                onboarding_context,
                 "",
-                "## Limitations of This Model",
-                "This is a deterministic simulation of a single day. It does not account for real-world variability, "
-                "material delays, equipment breakdowns, or other disruptions.",
+                "## Clarifying Questions",
+                "",
+                "The following questions would help improve the accuracy of this analysis:",
+                "",
+                "1. Please verify the machines and jobs listed above are correct.",
+                "2. Are there any missing machines or jobs not captured?",
+                "3. Is the routing (sequence of machines for each job) accurate?",
+                "4. Are the processing times and due dates correct?",
+                "",
+                "*Update your factory description or clarifications box with answers and rerun the analysis.*",
+                "",
             ])
-            return "\n".join(lines)
+
+        # Add user intent if available
+        if intent_context:
+            lines.extend([
+                "## Feasibility Assessment",
+                f"{intent_context}",
+                "",
+            ])
+
+        lines.extend([
+            "## Key Risks",
+            f"- {metrics.bottleneck_machine_id} is bottleneck at {metrics.bottleneck_utilization:.0%} utilization",
+            f"- Late jobs: {[k for k, v in metrics.job_lateness.items() if v > 0] or 'none'}",
+            "",
+            "## Recommended Actions",
+            "- Monitor bottleneck machine closely.",
+            "- Review job scheduling priorities.",
+            "",
+            "## Limitations of This Model",
+            "This is a deterministic simulation of a single day. It does not account for real-world variability, "
+            "material delays, equipment breakdowns, or other disruptions.",
+        ])
+        return "\n".join(lines)

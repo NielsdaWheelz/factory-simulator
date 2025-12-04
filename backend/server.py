@@ -133,6 +133,28 @@ class DataFlowStepInfo(BaseModel):
     step_output: Optional[DataPreviewInfo] = None
 
 
+class OnboardingIssueInfo(BaseModel):
+    """Info about an onboarding issue for frontend display."""
+    type: str
+    severity: str
+    message: str
+    related_ids: Optional[list[str]] = None
+
+
+class AltFactoryInfo(BaseModel):
+    """Reduced representation of an alternative factory config for frontend display."""
+    machines: list[str]  # Just machine IDs
+    jobs: list[str]  # Just job IDs
+    mode: str  # Extraction mode that produced this config
+
+
+class DiffSummaryInfo(BaseModel):
+    """Summary of differences between primary and an alternative config."""
+    alt_index: int  # Index of the alternative (0-based)
+    mode: str  # Extraction mode that produced the alternative
+    summary: str  # Human-readable summary of differences
+
+
 class AgentResponse(BaseModel):
     """Response from the agent endpoint."""
     
@@ -159,6 +181,15 @@ class AgentResponse(BaseModel):
     # The execution trace (for debugging/observability)
     trace: list[AgentTraceStep] = Field(default_factory=list)
     scratchpad: list[str] = Field(default_factory=list)
+    
+    # Onboarding diagnostics (for robust onboarding)
+    onboarding_issues: list[OnboardingIssueInfo] = Field(default_factory=list)
+    onboarding_score: Optional[int] = None
+    onboarding_trust: Optional[str] = None
+    
+    # Alternative factory interpretations (PR9)
+    alt_factories: list[AltFactoryInfo] = Field(default_factory=list)
+    diff_summaries: list[DiffSummaryInfo] = Field(default_factory=list)
 
 
 # =============================================================================
@@ -269,6 +300,37 @@ def agent_endpoint(req: AgentRequest) -> dict:
             ) if df_step.step_output else None,
         ))
     
+    # Build onboarding issues info
+    onboarding_issues = [
+        OnboardingIssueInfo(
+            type=issue.type,
+            severity=issue.severity,
+            message=issue.message,
+            related_ids=issue.related_ids,
+        )
+        for issue in state.onboarding_issues
+    ]
+    
+    # Build alternative factories info (PR9)
+    alt_factories = [
+        AltFactoryInfo(
+            machines=[m.id for m in alt_factory.machines],
+            jobs=[j.id for j in alt_factory.jobs],
+            mode=state.alt_factory_modes[i] if i < len(state.alt_factory_modes) else "unknown",
+        )
+        for i, alt_factory in enumerate(state.alt_factories)
+    ]
+    
+    # Build diff summaries info (PR9)
+    diff_summaries_info = [
+        DiffSummaryInfo(
+            alt_index=i,
+            mode=state.alt_factory_modes[i] if i < len(state.alt_factory_modes) else "unknown",
+            summary=summary,
+        )
+        for i, summary in enumerate(state.diff_summaries)
+    ]
+    
     # Build response
     response = AgentResponse(
         status=state.status.value,
@@ -284,6 +346,11 @@ def agent_endpoint(req: AgentRequest) -> dict:
         data_flow=data_flow,
         trace=trace,
         scratchpad=state.scratchpad,
+        onboarding_issues=onboarding_issues,
+        onboarding_score=state.onboarding_score,
+        onboarding_trust=state.onboarding_trust,
+        alt_factories=alt_factories,
+        diff_summaries=diff_summaries_info,
     )
     
     logger.info("=" * 80)

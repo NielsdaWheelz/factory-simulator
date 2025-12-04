@@ -36,7 +36,13 @@ from .onboarding import (
     extract_coarse_structure,
     extract_steps,
     validate_and_normalize,
+    validate_and_normalize_with_diagnostics,
     assess_coverage,
+    assemble_factory,
+    compute_onboarding_score,
+    estimate_onboarding_coverage,
+    run_multi_pass_onboarding,
+    compute_factory_diff,
     ExtractionError,
 )
 
@@ -195,14 +201,37 @@ class ParseFactoryTool(Tool):
         tool_call_id = str(uuid.uuid4())[:8]
         factory_text = args["description"]
         
+        # Track issues for scoring
+        normalization_repair_count = 0
+        coverage_issue_count = 0
+        alt_conflict_count = 0
+        
+        # Close any existing data flow step from the main loop
+        # We'll create our own sub-steps for each onboarding phase
+        state.finish_data_flow_step(status="done")
+        
         try:
-            # Stage 0: Extract explicit IDs (no LLM)
+            # =================================================================
+            # O0: Explicit ID Extraction (regex-based, no LLM)
+            # =================================================================
+            state.start_data_flow_step(
+                step_id=-10,
+                step_type="onboarding_o0",
+                step_name="🔍 O0: Explicit ID Extraction",
+                step_input=DataPreview(
+                    label="factory_text",
+                    type_name="str",
+                    preview=factory_text[:80] + ("..." if len(factory_text) > 80 else ""),
+                    size=f"{len(factory_text)} chars",
+                ),
+            )
+            state.add_thought("O0: Extracting explicit IDs from text (regex-based)")
+            
             t0 = time.time()
             ids = extract_explicit_ids(factory_text)
             latency_ids = int((time.time() - t0) * 1000)
             logger.debug(f"Extracted IDs: {len(ids.machine_ids)} machines, {len(ids.job_ids)} jobs")
             
-            # Track operation
             state.add_operation(
                 op_type=OperationType.FUNCTION,
                 name="extract_explicit_ids",
@@ -216,71 +245,177 @@ class ParseFactoryTool(Tool):
                 )],
             )
             
-            # Stage 1: Extract coarse structure (LLM call)
-            t0 = time.time()
-            coarse = extract_coarse_structure(factory_text, ids)
-            latency_coarse = int((time.time() - t0) * 1000)
-            state.record_llm_call(
-                schema_name="CoarseStructure",
-                latency_ms=latency_coarse,
-                purpose="Extract machines and jobs from description",
+            ids_found = len(ids.machine_ids) + len(ids.job_ids)
+            state.finish_data_flow_step(
+                status="done",
+                step_output=DataPreview(
+                    label="explicit_ids",
+                    type_name="ExplicitIds",
+                    preview=f"{len(ids.machine_ids)} machines, {len(ids.job_ids)} jobs" if ids_found > 0 else "none found (will rely on LLM)",
+                    size=f"{ids_found} total IDs",
+                ),
             )
             
-            # Track LLM operation
+            # =================================================================
+            # O1: Multi-Pass Entity & Routing Extraction (LLM-based)
+            # =================================================================
+            state.start_data_flow_step(
+                step_id=-11,
+                step_type="onboarding_o1",
+                step_name="🤖 O1: Multi-Pass Extraction",
+                step_input=DataPreview(
+                    label="factory_text",
+                    type_name="str",
+                    preview="...",
+                    size=f"{len(factory_text)} chars",
+                ),
+            )
+            state.add_thought("O1: Running multi-pass onboarding (entity extraction, routing, parameters)")
+            
+            t0 = time.time()
+            multi_pass_result = run_multi_pass_onboarding(factory_text, num_passes=2)
+            latency_multi_pass = int((time.time() - t0) * 1000)
+            
+            # Track the multi-pass operation
             state.add_operation(
                 op_type=OperationType.LLM,
-                name="extract_coarse_structure",
-                duration_ms=latency_coarse,
+                name="run_multi_pass_onboarding",
+                duration_ms=latency_multi_pass,
                 inputs=[
                     DataPreview(label="factory_text", type_name="str", preview="...", size=f"{len(factory_text)} chars"),
-                    DataPreview(label="explicit_ids", type_name="ExplicitIds", preview=f"{len(ids.machine_ids)}M, {len(ids.job_ids)}J", size=None),
+                    DataPreview(label="num_passes", type_name="int", preview="2", size=None),
                 ],
                 outputs=[DataPreview(
-                    label="coarse",
-                    type_name="CoarseStructure",
-                    preview=f"machines: {[m.id for m in coarse.machines]}, jobs: {[j.id for j in coarse.jobs]}",
-                    size=f"{len(coarse.machines)} machines, {len(coarse.jobs)} jobs",
+                    label="multi_pass_result",
+                    type_name="MultiPassResult",
+                    preview=f"primary: {multi_pass_result.primary_mode}, alts: {len(multi_pass_result.alt_configs)}, conflicts: {multi_pass_result.alt_conflict_count}",
+                    size=f"{len(multi_pass_result.all_pass_results)} passes",
                 )],
-                schema_name="CoarseStructure",
+                schema_name="MultiPassResult",
             )
             
-            # Stage 2: Extract steps and timings (LLM call)
-            t0 = time.time()
-            raw = extract_steps(factory_text, coarse)
-            latency_steps = int((time.time() - t0) * 1000)
-            state.record_llm_call(
-                schema_name="RawFactoryConfig",
-                latency_ms=latency_steps,
-                purpose="Extract job routing and processing times",
+            # Record LLM calls from passes (approximate: 2 calls per pass)
+            for pass_result in multi_pass_result.all_pass_results:
+                if pass_result.success:
+                    state.record_llm_call(
+                        schema_name="CoarseStructure",
+                        latency_ms=latency_multi_pass // (2 * len(multi_pass_result.all_pass_results)),
+                        purpose=f"Extract entities ({pass_result.mode} mode)",
+                    )
+                    state.record_llm_call(
+                        schema_name="RawFactoryConfig",
+                        latency_ms=latency_multi_pass // (2 * len(multi_pass_result.all_pass_results)),
+                        purpose=f"Extract routing/timing ({pass_result.mode} mode)",
+                    )
+            
+            # Check if we got a valid config
+            if multi_pass_result.primary_config is None:
+                # All passes failed - aggregate errors
+                error_messages = [
+                    f"{pr.mode}: {pr.error}" 
+                    for pr in multi_pass_result.all_pass_results 
+                    if pr.error
+                ]
+                combined_error = "; ".join(error_messages[:3])  # Limit to first 3
+                
+                state.finish_data_flow_step(
+                    status="failed",
+                    step_output=DataPreview(
+                        label="error",
+                        type_name="str",
+                        preview=combined_error[:80],
+                        size=None,
+                    ),
+                )
+                
+                # Create diagnostics summary step even on failure
+                self._create_diagnostics_summary_step(
+                    state=state,
+                    score=0,
+                    trust="LOW_TRUST",
+                    coverage_issues=2,
+                    normalization_repairs=0,
+                    alt_conflicts=0,
+                    factory=None,
+                )
+                
+                # Compute score for failure case
+                score, trust = compute_onboarding_score(
+                    coverage_issues=2,
+                    normalization_repairs=0,
+                    alt_conflicts=0,
+                )
+                state.set_onboarding_score(score, trust)
+                state.add_onboarding_issue(
+                    issue_type="extraction_error",
+                    severity="error",
+                    message=f"All extraction passes failed: {combined_error}",
+                    related_ids=None,
+                )
+                
+                return ToolResult(
+                    tool_call_id=tool_call_id,
+                    tool_name=self.name,
+                    success=False,
+                    error=f"All extraction passes failed: {combined_error}"
+                )
+            
+            factory = multi_pass_result.primary_config
+            alt_conflict_count = multi_pass_result.alt_conflict_count
+            
+            # Aggregate normalization warnings from successful passes
+            for pass_result in multi_pass_result.all_pass_results:
+                if pass_result.success:
+                    for warning in pass_result.normalization_warnings:
+                        normalization_repair_count += 1
+                        # Try to extract related IDs from the warning message
+                        related_ids = []
+                        for job in factory.jobs:
+                            if job.id in warning:
+                                related_ids.append(job.id)
+                        for machine in factory.machines:
+                            if machine.id in warning:
+                                related_ids.append(machine.id)
+                        
+                        state.add_onboarding_issue(
+                            issue_type="normalization_repair",
+                            severity="warning",
+                            message=warning,
+                            related_ids=related_ids if related_ids else None,
+                        )
+                    # Only count from primary pass to avoid double-counting
+                    break
+            
+            state.finish_data_flow_step(
+                status="done",
+                step_output=DataPreview(
+                    label="factory",
+                    type_name="FactoryConfig",
+                    preview=f"machines: {[m.id for m in factory.machines]}, jobs: {[j.id for j in factory.jobs]}",
+                    size=f"{len(factory.machines)} machines, {len(factory.jobs)} jobs",
+                ),
             )
             
-            # Track LLM operation
-            state.add_operation(
-                op_type=OperationType.LLM,
-                name="extract_steps",
-                duration_ms=latency_steps,
-                inputs=[
-                    DataPreview(label="factory_text", type_name="str", preview="...", size=f"{len(factory_text)} chars"),
-                    DataPreview(label="coarse", type_name="CoarseStructure", preview=f"{len(coarse.machines)}M, {len(coarse.jobs)}J", size=None),
-                ],
-                outputs=[DataPreview(
-                    label="raw",
+            # =================================================================
+            # O2: Normalization & Validation
+            # =================================================================
+            state.start_data_flow_step(
+                step_id=-12,
+                step_type="onboarding_o2",
+                step_name="✓ O2: Validation & Normalization",
+                step_input=DataPreview(
+                    label="raw_config",
                     type_name="RawFactoryConfig",
-                    preview=f"jobs with steps: {[j.id for j in raw.jobs]}",
-                    size=f"{sum(len(j.steps) for j in raw.jobs)} total steps",
-                )],
-                schema_name="RawFactoryConfig",
+                    preview=f"{len(factory.machines)}M, {len(factory.jobs)}J",
+                    size=None,
+                ),
             )
-            
-            # Stage 3: Validate and normalize (no LLM)
-            t0 = time.time()
-            factory = validate_and_normalize(raw)
-            latency_validate = int((time.time() - t0) * 1000)
+            state.add_thought(f"O2: Validation complete - {normalization_repair_count} repairs applied")
             
             state.add_operation(
                 op_type=OperationType.VALIDATION,
                 name="validate_and_normalize",
-                duration_ms=latency_validate,
+                duration_ms=0,  # Already included in multi-pass
                 inputs=[DataPreview(label="raw", type_name="RawFactoryConfig", preview="...", size=None)],
                 outputs=[DataPreview(
                     label="factory",
@@ -290,18 +425,77 @@ class ParseFactoryTool(Tool):
                 )],
             )
             
-            # Stage 4: Assess coverage (no LLM)
+            # Add operation for each normalization repair if any
+            if normalization_repair_count > 0:
+                state.add_operation(
+                    op_type=OperationType.VALIDATION,
+                    name="normalization_repairs",
+                    duration_ms=0,
+                    inputs=[],
+                    outputs=[DataPreview(
+                        label="repairs",
+                        type_name="list[str]",
+                        preview=f"{normalization_repair_count} repairs applied",
+                        size=None,
+                    )],
+                )
+            
+            state.finish_data_flow_step(
+                status="done",
+                step_output=DataPreview(
+                    label="normalized_factory",
+                    type_name="FactoryConfig",
+                    preview=f"{normalization_repair_count} repairs" if normalization_repair_count > 0 else "no repairs needed",
+                    size=f"{len(factory.machines)} machines, {len(factory.jobs)} jobs",
+                ),
+            )
+            
+            # =================================================================
+            # O3: Coverage Assessment
+            # =================================================================
+            state.start_data_flow_step(
+                step_id=-13,
+                step_type="onboarding_o3",
+                step_name="📊 O3: Coverage Assessment",
+                step_input=DataPreview(
+                    label="inputs",
+                    type_name="tuple",
+                    preview=f"explicit_ids + factory",
+                    size=None,
+                ),
+            )
+            state.add_thought("O3: Assessing coverage (comparing explicit IDs to parsed factory)")
+            
             t0 = time.time()
             coverage = assess_coverage(ids, factory)
             latency_coverage = int((time.time() - t0) * 1000)
+            
+            # Create OnboardingIssues from coverage misses
+            if coverage.missing_machines:
+                coverage_issue_count += len(coverage.missing_machines)
+                state.add_onboarding_issue(
+                    issue_type="coverage_miss",
+                    severity="warning",
+                    message=f"Machines mentioned in text but not in parsed config: {sorted(coverage.missing_machines)}",
+                    related_ids=sorted(coverage.missing_machines),
+                )
+            
+            if coverage.missing_jobs:
+                coverage_issue_count += len(coverage.missing_jobs)
+                state.add_onboarding_issue(
+                    issue_type="coverage_miss",
+                    severity="warning",
+                    message=f"Jobs mentioned in text but not in parsed config: {sorted(coverage.missing_jobs)}",
+                    related_ids=sorted(coverage.missing_jobs),
+                )
             
             state.add_operation(
                 op_type=OperationType.VALIDATION,
                 name="assess_coverage",
                 duration_ms=latency_coverage,
                 inputs=[
-                    DataPreview(label="explicit_ids", type_name="ExplicitIds", preview="...", size=None),
-                    DataPreview(label="factory", type_name="FactoryConfig", preview="...", size=None),
+                    DataPreview(label="explicit_ids", type_name="ExplicitIds", preview=f"{len(ids.machine_ids)}M, {len(ids.job_ids)}J", size=None),
+                    DataPreview(label="factory", type_name="FactoryConfig", preview=f"{len(factory.machines)}M, {len(factory.jobs)}J", size=None),
                 ],
                 outputs=[DataPreview(
                     label="coverage",
@@ -311,6 +505,115 @@ class ParseFactoryTool(Tool):
                 )],
             )
             
+            coverage_status = "complete" if (coverage.machine_coverage == 1.0 and coverage.job_coverage == 1.0) else "incomplete"
+            state.finish_data_flow_step(
+                status="done" if coverage_status == "complete" else "warning",
+                step_output=DataPreview(
+                    label="coverage_report",
+                    type_name="CoverageReport",
+                    preview=f"machines: {coverage.machine_coverage:.0%}, jobs: {coverage.job_coverage:.0%}",
+                    size=coverage_status,
+                ),
+            )
+            
+            # =================================================================
+            # O4: Consensus & Alternatives
+            # =================================================================
+            state.start_data_flow_step(
+                step_id=-14,
+                step_type="onboarding_o4",
+                step_name="🔄 O4: Consensus & Alternatives",
+                step_input=DataPreview(
+                    label="configs",
+                    type_name="list[FactoryConfig]",
+                    preview=f"primary + {len(multi_pass_result.alt_configs)} alternatives",
+                    size=None,
+                ),
+            )
+            state.add_thought(f"O4: Computing consensus across {len(multi_pass_result.all_pass_results)} extraction passes")
+            
+            # Create OnboardingIssues from alternative config conflicts
+            if alt_conflict_count > 0:
+                for i, (diff, summary) in enumerate(zip(multi_pass_result.diffs, multi_pass_result.diff_summaries)):
+                    if not diff.is_identical:
+                        # Extract related IDs from the diff
+                        related_ids = []
+                        related_ids.extend(diff.machines_added)
+                        related_ids.extend(diff.machines_removed)
+                        related_ids.extend(diff.jobs_added)
+                        related_ids.extend(diff.jobs_removed)
+                        related_ids.extend(diff.routing_differences.keys())
+                        
+                        state.add_onboarding_issue(
+                            issue_type="alt_conflict",
+                            severity="warning",
+                            message=f"Alternative interpretation ({multi_pass_result.alt_modes[i]} mode) differs: {summary}",
+                            related_ids=list(set(related_ids)) if related_ids else None,
+                        )
+            
+            state.add_operation(
+                op_type=OperationType.VALIDATION,
+                name="multi_pass_consensus",
+                duration_ms=0,
+                inputs=[
+                    DataPreview(label="primary_config", type_name="FactoryConfig", preview=f"{len(factory.machines)}M, {len(factory.jobs)}J", size=None),
+                    DataPreview(label="alt_configs", type_name="list[FactoryConfig]", preview=f"{len(multi_pass_result.alt_configs)} alternatives", size=None),
+                ],
+                outputs=[DataPreview(
+                    label="consensus",
+                    type_name="str",
+                    preview=f"conflicts: {alt_conflict_count}, identical: {alt_conflict_count == 0}",
+                    size=f"{len(multi_pass_result.diff_summaries)} diffs",
+                )],
+            )
+            
+            consensus_status = "unanimous" if alt_conflict_count == 0 else f"{alt_conflict_count} conflicts"
+            state.finish_data_flow_step(
+                status="done" if alt_conflict_count == 0 else "warning",
+                step_output=DataPreview(
+                    label="consensus_result",
+                    type_name="str",
+                    preview=consensus_status,
+                    size=f"primary: {multi_pass_result.primary_mode}",
+                ),
+            )
+            
+            # =================================================================
+            # O5: Diagnostics Summary
+            # =================================================================
+            score, trust = compute_onboarding_score(
+                coverage_issues=coverage_issue_count,
+                normalization_repairs=normalization_repair_count,
+                alt_conflicts=alt_conflict_count,
+            )
+            state.set_onboarding_score(score, trust)
+            
+            # Store alternative factories for frontend display (PR9)
+            state.set_alternative_factories(
+                alt_factories=multi_pass_result.alt_configs,
+                alt_modes=multi_pass_result.alt_modes,
+                diff_summaries=multi_pass_result.diff_summaries,
+            )
+            
+            self._create_diagnostics_summary_step(
+                state=state,
+                score=score,
+                trust=trust,
+                coverage_issues=coverage_issue_count,
+                normalization_repairs=normalization_repair_count,
+                alt_conflicts=alt_conflict_count,
+                factory=factory,
+            )
+            
+            # Log diagnostics summary to scratchpad
+            state.add_thought(
+                f"O5: Diagnostics complete - score={score} ({trust}), "
+                f"coverage_issues={coverage_issue_count}, "
+                f"normalization_repairs={normalization_repair_count}, "
+                f"alt_conflicts={alt_conflict_count}"
+            )
+            
+            # Still fail if coverage is incomplete (but we've recorded the issues)
             if coverage.machine_coverage < 1.0 or coverage.job_coverage < 1.0:
                 return ToolResult(
                     tool_call_id=tool_call_id,
@@ -333,10 +636,29 @@ class ParseFactoryTool(Tool):
                     "job_count": len(factory.jobs),
                     "machines": [m.id for m in factory.machines],
                     "jobs": [j.id for j in factory.jobs],
+                    "onboarding_score": score,
+                    "onboarding_trust": trust,
+                    "alt_configs_count": len(multi_pass_result.alt_configs),
+                    "alt_conflicts_count": alt_conflict_count,
+                    "diff_summaries": multi_pass_result.diff_summaries,
                 }
             )
             
         except ExtractionError as e:
+            # Still compute a score even on failure
+            score, trust = compute_onboarding_score(
+                coverage_issues=coverage_issue_count + 1,  # Count the failure as an issue
+                normalization_repairs=normalization_repair_count,
+                alt_conflicts=alt_conflict_count,
+            )
+            state.set_onboarding_score(score, trust)
+            state.add_onboarding_issue(
+                issue_type="extraction_error",
+                severity="error",
+                message=f"{e.code}: {e.message}",
+                related_ids=None,
+            )
+            
             return ToolResult(
                 tool_call_id=tool_call_id,
                 tool_name=self.name,
@@ -344,12 +666,108 @@ class ParseFactoryTool(Tool):
                 error=f"Extraction failed ({e.code}): {e.message}"
             )
         except Exception as e:
+            # Still compute a score even on unexpected failure
+            score, trust = compute_onboarding_score(
+                coverage_issues=coverage_issue_count + 2,  # Count unexpected failure as worse
+                normalization_repairs=normalization_repair_count,
+                alt_conflicts=alt_conflict_count,
+            )
+            state.set_onboarding_score(score, trust)
+            state.add_onboarding_issue(
+                issue_type="unexpected_error",
+                severity="error",
+                message=f"Unexpected error: {str(e)[:200]}",
+                related_ids=None,
+            )
+            
             return ToolResult(
                 tool_call_id=tool_call_id,
                 tool_name=self.name,
                 success=False,
                 error=f"Unexpected error: {str(e)[:200]}"
             )
+    
+    def _create_diagnostics_summary_step(
+        self,
+        state: AgentState,
+        score: int,
+        trust: str,
+        coverage_issues: int,
+        normalization_repairs: int,
+        alt_conflicts: int,
+        factory: FactoryConfig | None,
+    ) -> None:
+        """
+        Create the O5: Diagnostics Summary data flow step.
+        
+        This step summarizes the overall onboarding quality including:
+        - Onboarding score and trust level
+        - Issue counts by category
+        - Final factory configuration summary
+        """
+        state.start_data_flow_step(
+            step_id=-15,
+            step_type="onboarding_o5",
+            step_name="📋 O5: Diagnostics Summary",
+            step_input=DataPreview(
+                label="diagnostics_input",
+                type_name="tuple",
+                preview=f"issues + score + factory",
+                size=None,
+            ),
+        )
+        
+        # Add operation showing score computation
+        state.add_operation(
+            op_type=OperationType.VALIDATION,
+            name="compute_onboarding_score",
+            duration_ms=0,
+            inputs=[
+                DataPreview(label="coverage_issues", type_name="int", preview=str(coverage_issues), size=None),
+                DataPreview(label="normalization_repairs", type_name="int", preview=str(normalization_repairs), size=None),
+                DataPreview(label="alt_conflicts", type_name="int", preview=str(alt_conflicts), size=None),
+            ],
+            outputs=[
+                DataPreview(label="score", type_name="int", preview=str(score), size=None),
+                DataPreview(label="trust", type_name="str", preview=trust, size=None),
+            ],
+        )
+        
+        # Add operation showing issue summary
+        total_issues = len(state.onboarding_issues)
+        issue_summary = f"{total_issues} total issues"
+        if total_issues > 0:
+            by_severity = {}
+            for issue in state.onboarding_issues:
+                by_severity[issue.severity] = by_severity.get(issue.severity, 0) + 1
+            issue_summary += f" ({', '.join(f'{v} {k}' for k, v in by_severity.items())})"
+        
+        state.add_operation(
+            op_type=OperationType.VALIDATION,
+            name="aggregate_issues",
+            duration_ms=0,
+            inputs=[],
+            outputs=[
+                DataPreview(
+                    label="issues",
+                    type_name="list[OnboardingIssue]",
+                    preview=issue_summary,
+                    size=f"{total_issues} issues",
+                ),
+            ],
+        )
+        
+        # Finish with the final summary
+        factory_summary = f"{len(factory.machines)}M, {len(factory.jobs)}J" if factory else "no factory"
+        state.finish_data_flow_step(
+            status="done" if trust == "HIGH_TRUST" else ("warning" if trust == "MEDIUM_TRUST" else "failed"),
+            step_output=DataPreview(
+                label="onboarding_summary",
+                type_name="dict",
+                preview=f"score={score} ({trust}), {factory_summary}",
+                size=issue_summary,
+            ),
+        )
 
 
 class GetDemoFactoryTool(Tool):
@@ -733,6 +1151,7 @@ class GenerateBriefingTool(Tool):
     Generates a structured markdown briefing from collected simulation data.
     
     Uses the existing BriefingAgent to produce professional reports.
+    Enhanced for PR6: Now includes onboarding diagnostics and clarifying questions.
     """
     
     @property
@@ -745,6 +1164,7 @@ class GenerateBriefingTool(Tool):
             "Generate a professional markdown briefing summarizing simulation results. "
             "Synthesizes all metrics collected so far into a cohesive report with "
             "risks, recommendations, and key findings. "
+            "If onboarding issues were detected, also generates clarifying questions. "
             "IMPORTANT: Run at least one simulation first to have data to report on."
         )
     
@@ -799,6 +1219,9 @@ class GenerateBriefingTool(Tool):
             if focus:
                 context += f"\n\nFocus area requested: {focus}"
             
+            # Build onboarding context from state diagnostics (PR6)
+            onboarding_context = self._build_onboarding_context(state)
+            
             # Use BriefingAgent to generate the report (includes LLM call)
             agent = BriefingAgent()
             primary_metrics = state.metrics_collected[0]  # Use first scenario as primary
@@ -809,23 +1232,34 @@ class GenerateBriefingTool(Tool):
                 context=context,
                 intent_context=f"User request: {state.user_request}",
                 futures_context=f"Analyzed {len(state.scenarios_run)} scenarios",
+                onboarding_context=onboarding_context,
+                factory=state.factory,
             )
             latency_briefing = int((time.time() - t0) * 1000)
             state.record_llm_call(
                 schema_name="BriefingResponse",
                 latency_ms=latency_briefing,
-                purpose="Generate executive briefing with recommendations",
+                purpose="Generate executive briefing with recommendations and clarifying questions",
             )
             
             # Track LLM operation
+            inputs = [
+                DataPreview(label="metrics", type_name="ScenarioMetrics", preview=f"{len(state.metrics_collected)} scenarios", size=None),
+                DataPreview(label="context", type_name="str", preview=context[:60] + "...", size=f"{len(context)} chars"),
+            ]
+            if onboarding_context:
+                inputs.append(DataPreview(
+                    label="onboarding_context",
+                    type_name="str",
+                    preview=onboarding_context[:60] + "..." if len(onboarding_context) > 60 else onboarding_context,
+                    size=f"{len(state.onboarding_issues)} issues",
+                ))
+            
             state.add_operation(
                 op_type=OperationType.LLM,
                 name="generate_briefing",
                 duration_ms=latency_briefing,
-                inputs=[
-                    DataPreview(label="metrics", type_name="ScenarioMetrics", preview=f"{len(state.metrics_collected)} scenarios", size=None),
-                    DataPreview(label="context", type_name="str", preview=context[:60] + "...", size=f"{len(context)} chars"),
-                ],
+                inputs=inputs,
                 outputs=[DataPreview(
                     label="briefing",
                     type_name="str",
@@ -844,6 +1278,9 @@ class GenerateBriefingTool(Tool):
                     "scenarios_included": len(state.scenarios_run),
                     "primary_scenario": state.scenarios_run[0].scenario_type.value,
                     "briefing_length": len(briefing),
+                    "onboarding_issues_count": len(state.onboarding_issues),
+                    "onboarding_score": state.onboarding_score,
+                    "onboarding_trust": state.onboarding_trust,
                 }
             )
             
@@ -855,6 +1292,58 @@ class GenerateBriefingTool(Tool):
                 success=False,
                 error=f"Briefing generation failed: {str(e)[:200]}"
             )
+    
+    def _build_onboarding_context(self, state: AgentState) -> str | None:
+        """
+        Build onboarding context string from state diagnostics for BriefingAgent.
+        
+        Returns None if no onboarding issues or score are present.
+        """
+        if not state.onboarding_issues and state.onboarding_score is None:
+            return None
+        
+        lines = []
+        
+        # Add score and trust level
+        if state.onboarding_score is not None:
+            trust_label = state.onboarding_trust or "UNKNOWN"
+            lines.append(f"Onboarding Quality Score: {state.onboarding_score}/100 ({trust_label})")
+            lines.append("")
+        
+        # Add issues grouped by severity
+        if state.onboarding_issues:
+            # Group by severity
+            by_severity: dict[str, list] = {"error": [], "warning": [], "info": []}
+            for issue in state.onboarding_issues:
+                severity = issue.severity.lower()
+                if severity in by_severity:
+                    by_severity[severity].append(issue)
+                else:
+                    by_severity["info"].append(issue)
+            
+            lines.append("Issues detected during factory parsing:")
+            lines.append("")
+            
+            # Show errors first, then warnings, then info
+            for severity in ["error", "warning", "info"]:
+                issues = by_severity[severity]
+                if issues:
+                    severity_label = severity.upper()
+                    for issue in issues:
+                        related = ""
+                        if issue.related_ids:
+                            related = f" (related: {', '.join(issue.related_ids)})"
+                        lines.append(f"- [{severity_label}] {issue.message}{related}")
+            
+            lines.append("")
+            
+            # Add summary for LLM context
+            error_count = len(by_severity["error"])
+            warning_count = len(by_severity["warning"])
+            info_count = len(by_severity["info"])
+            lines.append(f"Summary: {error_count} errors, {warning_count} warnings, {info_count} info")
+        
+        return "\n".join(lines) if lines else None
 
 
 # =============================================================================
@@ -874,6 +1363,9 @@ class ExtractFactoryEntitiesTool(Tool):
     - Extracts machine IDs and names
     - Extracts job IDs and names
     - Does NOT extract routing or parameters
+    
+    Stores intermediate results (coarse structure) in state for reuse by
+    subsequent tools (ExtractRoutingTool, ExtractParametersTool).
     """
     
     @property
@@ -897,36 +1389,49 @@ class ExtractFactoryEntitiesTool(Tool):
         description = args["description"]
         
         try:
-            # Use regex-based extraction from onboarding module
+            # Stage 0: Extract explicit IDs (regex, no LLM)
             ids = extract_explicit_ids(description)
             
-            # Extract coarse structure (machines and jobs only)
+            # Stage 1: Extract coarse structure (LLM call)
             coarse = extract_coarse_structure(description, ids)
             
-            # Build entity result
+            # Store coarse structure for reuse by subsequent tools
+            state._coarse_structure = coarse
+            
+            # Build entity result from coarse structure (authoritative source)
+            # Use coarse.machines/jobs as source of truth, not regex IDs
+            machine_ids = [m.id for m in coarse.machines]
             machine_names = {m.id: m.name for m in coarse.machines}
+            job_ids = [j.id for j in coarse.jobs]
             job_names = {j.id: j.name for j in coarse.jobs}
             
             # Store in state for subsequent tools
             from .agent_types import FactoryEntities
             state.factory_entities = FactoryEntities(
-                machine_ids=sorted(ids.machine_ids),
+                machine_ids=sorted(machine_ids),
                 machine_names=machine_names,
-                job_ids=sorted(ids.job_ids),
+                job_ids=sorted(job_ids),
                 job_names=job_names,
             )
+            
+            # Also store factory text for later use
+            state.factory_text = description
             
             return ToolResult(
                 tool_call_id=tool_call_id,
                 tool_name=self.name,
                 success=True,
                 output={
-                    "machine_ids": sorted(ids.machine_ids),
+                    "machine_ids": sorted(machine_ids),
                     "machine_names": machine_names,
-                    "job_ids": sorted(ids.job_ids),
+                    "job_ids": sorted(job_ids),
                     "job_names": job_names,
-                    "total_machines": len(ids.machine_ids),
-                    "total_jobs": len(ids.job_ids),
+                    "total_machines": len(machine_ids),
+                    "total_jobs": len(job_ids),
+                    "explicit_ids_found": {
+                        "machines": sorted(ids.machine_ids),
+                        "jobs": sorted(ids.job_ids),
+                    },
                 }
             )
         except ExtractionError as e:
@@ -954,7 +1459,8 @@ class ExtractRoutingTool(Tool):
     """
     Extract job routing (machine sequences) from factory description.
     
-    Requires entities to be extracted first.
+    Requires entities to be extracted first (uses cached coarse structure).
+    Stores the full RawFactoryConfig for reuse by ExtractParametersTool.
     """
     
     @property
@@ -986,14 +1492,21 @@ class ExtractRoutingTool(Tool):
             )
         
         try:
-            # Get IDs from state
-            ids = extract_explicit_ids(description)
-            coarse = extract_coarse_structure(description, ids)
+            # Reuse coarse structure from entity extraction (avoid redundant LLM call)
+            coarse = state._coarse_structure
+            if coarse is None:
+                # Fallback: re-extract if not cached (shouldn't happen in normal flow)
+                ids = extract_explicit_ids(description)
+                coarse = extract_coarse_structure(description, ids)
+                state._coarse_structure = coarse
             
-            # Extract full config with routing
+            # Stage 2: Extract steps and timings (LLM call)
             raw = extract_steps(description, coarse)
             
-            # Extract just the routing info
+            # Store raw factory config for reuse by ExtractParametersTool
+            state._raw_factory_config = raw
+            
+            # Extract routing info from raw config
             job_routes = {}
             for job in raw.jobs:
                 if job.steps:
@@ -1038,6 +1551,7 @@ class ExtractParametersTool(Tool):
     Extract processing times and due dates from factory description.
     
     Requires entities and routing to be extracted first.
+    Reuses the RawFactoryConfig cached by ExtractRoutingTool (NO additional LLM call).
     """
     
     @property
@@ -1076,20 +1590,30 @@ class ExtractParametersTool(Tool):
             )
         
         try:
-            ids = extract_explicit_ids(description)
-            coarse = extract_coarse_structure(description, ids)
-            raw = extract_steps(description, coarse)
+            # Reuse raw factory config from routing extraction (NO LLM call needed!)
+            raw = state._raw_factory_config
+            if raw is None:
+                # Fallback: re-extract if not cached (shouldn't happen in normal flow)
+                coarse = state._coarse_structure
+                if coarse is None:
+                    ids = extract_explicit_ids(description)
+                    coarse = extract_coarse_structure(description, ids)
+                    state._coarse_structure = coarse
+                raw = extract_steps(description, coarse)
+                state._raw_factory_config = raw
             
-            # Extract processing times and due dates
+            # Extract processing times and due dates from cached raw config
             processing_times = {}
             due_times = {}
             
             for job in raw.jobs:
                 job_times = {}
                 for step in job.steps:
-                    job_times[step.machine_id] = step.duration_hours
+                    # Convert to int for consistency with FactoryParameters type
+                    job_times[step.machine_id] = int(step.duration_hours)
                 processing_times[job.id] = job_times
-                due_times[job.id] = job.due_time_hour
+                # Handle None due_time_hour
+                due_times[job.id] = int(job.due_time_hour) if job.due_time_hour is not None else 24
             
             # Store in state
             from .agent_types import FactoryParameters
@@ -1132,8 +1656,10 @@ class ValidateFactoryTool(Tool):
     """
     Validate factory data and assemble into FactoryConfig.
     
-    Pure consistency checks + coverage validation.
-    No LLM calls - just validates extracted data.
+    Uses the same validate_and_normalize function as ParseFactoryTool to ensure
+    consistent behavior between monolithic and atomic extraction pipelines.
+    
+    Pure consistency checks + coverage validation. No LLM calls.
     """
     
     @property
@@ -1175,76 +1701,59 @@ class ValidateFactoryTool(Tool):
             )
         
         try:
-            # Assemble FactoryConfig from extracted data
-            entities = state.factory_entities
-            routing = state.factory_routing
-            params = state.factory_parameters
+            # Prefer using cached RawFactoryConfig if available (same path as ParseFactoryTool)
+            raw = getattr(state, '_raw_factory_config', None)
             
-            # Build machines
-            machines = []
-            for mid in entities.machine_ids:
-                machines.append(Machine(
-                    id=mid,
-                    name=entities.machine_names.get(mid, mid)
-                ))
-            
-            # Build jobs
-            jobs = []
-            for jid in entities.job_ids:
-                steps = []
-                route = routing.job_routes.get(jid, [])
-                times = params.processing_times.get(jid, {})
+            if raw is not None:
+                # Use validate_and_normalize for consistency with ParseFactoryTool
+                factory = validate_and_normalize(raw)
                 
-                for machine_id in route:
-                    duration = times.get(machine_id, 1)  # Default 1 hour
-                    steps.append(Step(machine_id=machine_id, duration_hours=duration))
-                
-                if not steps:
-                    warnings.append(f"Job {jid} has no steps - using default")
-                    # Use first machine as fallback
-                    if machines:
-                        steps.append(Step(machine_id=machines[0].id, duration_hours=1))
-                
-                jobs.append(Job(
-                    id=jid,
-                    name=entities.job_names.get(jid, jid),
-                    steps=steps,
-                    due_time_hour=params.due_times.get(jid, 24)
-                ))
-            
-            # Validate coverage
-            machine_coverage = len(machines) / max(1, len(entities.machine_ids))
-            job_coverage = len(jobs) / max(1, len(entities.job_ids))
-            
-            if machine_coverage < 1.0:
-                warnings.append(f"Machine coverage: {machine_coverage:.0%}")
-            if job_coverage < 1.0:
-                warnings.append(f"Job coverage: {job_coverage:.0%}")
-            
-            # Check for missing machine references in steps
-            machine_ids_set = {m.id for m in machines}
-            for job in jobs:
-                for step in job.steps:
-                    if step.machine_id not in machine_ids_set:
-                        errors.append(f"Job {job.id} references unknown machine {step.machine_id}")
-            
-            if errors:
-                from .agent_types import FactoryValidationReport
-                report = FactoryValidationReport(
-                    valid=False,
-                    errors=errors,
-                    warnings=warnings,
-                    coverage={"machines": machine_coverage, "jobs": job_coverage}
+                # Assess coverage using explicit IDs from factory text
+                if state.factory_text:
+                    coverage = assess_coverage(extract_explicit_ids(state.factory_text), factory)
+                    machine_coverage = coverage.machine_coverage
+                    job_coverage = coverage.job_coverage
+                    
+                    if coverage.missing_machines:
+                        warnings.append(f"Missing machines from text: {sorted(coverage.missing_machines)}")
+                    if coverage.missing_jobs:
+                        warnings.append(f"Missing jobs from text: {sorted(coverage.missing_jobs)}")
+                else:
+                    machine_coverage = 1.0
+                    job_coverage = 1.0
+            else:
+                # Use the deterministic assembler (PR2) to build factory from intermediate state
+                # This ensures consistent assembly logic across all code paths
+                assembly_result = assemble_factory(
+                    entities=state.factory_entities,
+                    routing=state.factory_routing,
+                    parameters=state.factory_parameters,
                 )
-                return ToolResult(
-                    tool_call_id=tool_call_id,
-                    tool_name=self.name,
-                    success=False,
-                    error=f"Validation failed: {'; '.join(errors)}"
-                )
+                
+                # Collect assembly warnings
+                warnings.extend(assembly_result.warnings)
+                factory = assembly_result.factory
+                
+                # Check for fatal issues: jobs with steps referencing unknown machines
+                machine_ids_set = {m.id for m in factory.machines}
+                for job in factory.jobs:
+                    for step in job.steps:
+                        if step.machine_id not in machine_ids_set:
+                            errors.append(f"Job {job.id} references unknown machine {step.machine_id}")
+                
+                if errors:
+                    return ToolResult(
+                        tool_call_id=tool_call_id,
+                        tool_name=self.name,
+                        success=False,
+                        error=f"Validation failed: {'; '.join(errors)}"
+                    )
+                
+                # Compute coverage based on entity counts
+                machine_coverage = len(factory.machines) / max(1, len(state.factory_entities.machine_ids))
+                job_coverage = len(factory.jobs) / max(1, len(state.factory_entities.job_ids))
             
-            # Success - create FactoryConfig
-            factory = FactoryConfig(machines=machines, jobs=jobs)
+            # Store the validated factory in state
             state.factory = factory
             
             return ToolResult(
@@ -1253,15 +1762,22 @@ class ValidateFactoryTool(Tool):
                 success=True,
                 output={
                     "factory": factory.model_dump(),
-                    "machine_count": len(machines),
-                    "job_count": len(jobs),
-                    "machines": [m.id for m in machines],
-                    "jobs": [j.id for j in jobs],
+                    "machine_count": len(factory.machines),
+                    "job_count": len(factory.jobs),
+                    "machines": [m.id for m in factory.machines],
+                    "jobs": [j.id for j in factory.jobs],
                     "warnings": warnings,
                     "coverage": {"machines": machine_coverage, "jobs": job_coverage}
                 }
             )
             
+        except ExtractionError as e:
+            return ToolResult(
+                tool_call_id=tool_call_id,
+                tool_name=self.name,
+                success=False,
+                error=f"Validation failed ({e.code}): {e.message}"
+            )
         except Exception as e:
             return ToolResult(
                 tool_call_id=tool_call_id,
