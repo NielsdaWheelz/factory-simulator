@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { runAgent, type AgentResponse } from './api';
+import { runAgent, type AgentResponse, type OnboardingIssueInfo, type OnboardingTrust, type AltFactoryInfo, type DiffSummaryInfo } from './api';
 import { AgentTrace } from './components/AgentTrace';
 import { DataFlowDiagram } from './components/DataFlowDiagram';
 import './App.css';
@@ -17,6 +17,7 @@ Key interest: bottleneck identification and makespan optimization.`;
 function App() {
   const [factoryDescription, setFactoryDescription] = useState(DEFAULT_FACTORY_DESCRIPTION);
   const [situation, setSituation] = useState(DEFAULT_SITUATION);
+  const [clarifications, setClarifications] = useState('');
   const [agentResult, setAgentResult] = useState<AgentResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +29,13 @@ function App() {
     setAgentResult(null);
     
     try {
-      const userRequest = `Factory: ${factoryDescription}\n\nSituation: ${situation}`;
+      // Build user request with optional clarifications section
+      let userRequest = `Factory:\n${factoryDescription}`;
+      if (clarifications.trim()) {
+        userRequest += `\n\nClarifications:\n${clarifications}`;
+      }
+      userRequest += `\n\nSituation:\n${situation}`;
+      
       const response = await runAgent(userRequest);
       setAgentResult(response);
       console.log('Agent complete:', response);
@@ -80,7 +87,22 @@ function App() {
                   value={situation}
                   onChange={(e) => setSituation(e.target.value)}
                   placeholder="Describe current priorities, constraints, or special requests..."
-                  rows={8}
+                  rows={6}
+                />
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="clarifications">
+                  Clarifications for Next Run
+                  <span className="label-hint"> (answer questions from previous run)</span>
+                </label>
+                <textarea
+                  id="clarifications"
+                  className="textarea textarea--clarifications"
+                  value={clarifications}
+                  onChange={(e) => setClarifications(e.target.value)}
+                  placeholder="If the agent asked clarifying questions, answer them here and rerun..."
+                  rows={4}
                 />
               </div>
 
@@ -106,7 +128,7 @@ function App() {
             {agentResult && agentResult.data_flow && agentResult.data_flow.length > 0 ? (
               <DataFlowDiagram
                 dataFlow={agentResult.data_flow}
-                userRequest={`Factory: ${factoryDescription}\n\nSituation: ${situation}`}
+                userRequest={`Factory:\n${factoryDescription}${clarifications.trim() ? `\n\nClarifications:\n${clarifications}` : ''}\n\nSituation:\n${situation}`}
                 finalAnswer={agentResult.final_answer}
               />
             ) : (
@@ -121,6 +143,24 @@ function App() {
 
           {/* RIGHT COLUMN: Analysis & Results */}
           <section className="layout-column layout-column--right">
+            {/* Onboarding Summary Panel */}
+            {agentResult && agentResult.onboarding_score !== null && (
+              <OnboardingSummary
+                score={agentResult.onboarding_score}
+                trust={agentResult.onboarding_trust}
+                issues={agentResult.onboarding_issues}
+              />
+            )}
+
+            {/* Alternative Interpretations Panel (PR9) */}
+            {agentResult && agentResult.diff_summaries && agentResult.diff_summaries.length > 0 && (
+              <AlternativeInterpretations
+                altFactories={agentResult.alt_factories}
+                diffSummaries={agentResult.diff_summaries}
+                primaryFactory={agentResult.factory}
+              />
+            )}
+
             {agentResult && agentResult.factory && (
               <div className="panel factory-panel">
                 <h2 className="panel-title">Inferred Factory</h2>
@@ -213,6 +253,245 @@ function App() {
           </section>
         </div>
       </main>
+    </div>
+  );
+}
+
+// Onboarding Summary Component
+interface OnboardingSummaryProps {
+  score: number;
+  trust: OnboardingTrust | null;
+  issues: OnboardingIssueInfo[];
+}
+
+function OnboardingSummary({ score, trust, issues }: OnboardingSummaryProps) {
+  const getTrustColor = (trust: OnboardingTrust | null): string => {
+    switch (trust) {
+      case 'HIGH_TRUST':
+        return 'var(--status-success)';
+      case 'MEDIUM_TRUST':
+        return 'var(--status-warning)';
+      case 'LOW_TRUST':
+        return 'var(--status-error)';
+      default:
+        return 'var(--text-muted)';
+    }
+  };
+
+  const getTrustLabel = (trust: OnboardingTrust | null): string => {
+    switch (trust) {
+      case 'HIGH_TRUST':
+        return 'High Trust';
+      case 'MEDIUM_TRUST':
+        return 'Medium Trust';
+      case 'LOW_TRUST':
+        return 'Low Trust';
+      default:
+        return 'Unknown';
+    }
+  };
+
+  const getSeverityIcon = (severity: string): string => {
+    switch (severity.toLowerCase()) {
+      case 'error':
+        return '✗';
+      case 'warning':
+        return '⚠';
+      case 'info':
+        return 'ℹ';
+      default:
+        return '•';
+    }
+  };
+
+  const getSeverityClass = (severity: string): string => {
+    switch (severity.toLowerCase()) {
+      case 'error':
+        return 'issue--error';
+      case 'warning':
+        return 'issue--warning';
+      case 'info':
+        return 'issue--info';
+      default:
+        return '';
+    }
+  };
+
+  // Group issues by severity
+  const errorIssues = issues.filter((i) => i.severity.toLowerCase() === 'error');
+  const warningIssues = issues.filter((i) => i.severity.toLowerCase() === 'warning');
+  const infoIssues = issues.filter((i) => i.severity.toLowerCase() === 'info');
+
+  return (
+    <div className="panel onboarding-summary-panel">
+      <h2 className="panel-title">Onboarding Quality</h2>
+
+      {/* Score and Trust Badge */}
+      <div className="onboarding-score-section">
+        <div className="onboarding-score">
+          <span className="score-value">{score}</span>
+          <span className="score-max">/100</span>
+        </div>
+        <div
+          className="trust-badge"
+          style={{ backgroundColor: getTrustColor(trust) }}
+        >
+          {getTrustLabel(trust)}
+        </div>
+      </div>
+
+      {/* Issues List */}
+      {issues.length > 0 ? (
+        <div className="onboarding-issues">
+          <h3 className="issues-header">
+            Issues ({issues.length})
+          </h3>
+          <ul className="issues-list">
+            {errorIssues.map((issue, idx) => (
+              <li key={`error-${idx}`} className={`issue-item ${getSeverityClass(issue.severity)}`}>
+                <span className="issue-icon">{getSeverityIcon(issue.severity)}</span>
+                <span className="issue-message">{issue.message}</span>
+                {issue.related_ids && issue.related_ids.length > 0 && (
+                  <span className="issue-ids">[{issue.related_ids.join(', ')}]</span>
+                )}
+              </li>
+            ))}
+            {warningIssues.map((issue, idx) => (
+              <li key={`warning-${idx}`} className={`issue-item ${getSeverityClass(issue.severity)}`}>
+                <span className="issue-icon">{getSeverityIcon(issue.severity)}</span>
+                <span className="issue-message">{issue.message}</span>
+                {issue.related_ids && issue.related_ids.length > 0 && (
+                  <span className="issue-ids">[{issue.related_ids.join(', ')}]</span>
+                )}
+              </li>
+            ))}
+            {infoIssues.map((issue, idx) => (
+              <li key={`info-${idx}`} className={`issue-item ${getSeverityClass(issue.severity)}`}>
+                <span className="issue-icon">{getSeverityIcon(issue.severity)}</span>
+                <span className="issue-message">{issue.message}</span>
+                {issue.related_ids && issue.related_ids.length > 0 && (
+                  <span className="issue-ids">[{issue.related_ids.join(', ')}]</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <div className="no-issues">
+          <span className="no-issues-icon">✓</span>
+          <span>No issues detected</span>
+        </div>
+      )}
+
+      {/* Hint for correction loop */}
+      {issues.length > 0 && (
+        <p className="correction-hint">
+          Answer the clarifying questions in the Agent Response below, then add your answers to the "Clarifications" box and rerun.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// Alternative Interpretations Component (PR9)
+interface AlternativeInterpretationsProps {
+  altFactories: AltFactoryInfo[];
+  diffSummaries: DiffSummaryInfo[];
+  primaryFactory: { machines: { id: string; name: string }[]; jobs: { id: string; name: string }[] } | null;
+}
+
+function AlternativeInterpretations({ altFactories, diffSummaries, primaryFactory }: AlternativeInterpretationsProps) {
+  if (diffSummaries.length === 0) {
+    return null;
+  }
+
+  const getModeLabel = (mode: string): string => {
+    switch (mode.toLowerCase()) {
+      case 'conservative':
+        return 'Conservative';
+      case 'inclusive':
+        return 'Inclusive';
+      case 'default':
+        return 'Default';
+      default:
+        return mode;
+    }
+  };
+
+  const getModeDescription = (mode: string): string => {
+    switch (mode.toLowerCase()) {
+      case 'conservative':
+        return 'Prefers explicit mentions, fewer inferences';
+      case 'inclusive':
+        return 'More aggressive at inferring entities';
+      case 'default':
+        return 'Balanced extraction';
+      default:
+        return '';
+    }
+  };
+
+  return (
+    <div className="panel alt-interpretations-panel">
+      <h2 className="panel-title">
+        Alternative Interpretations
+        <span className="alt-count-badge">{diffSummaries.length}</span>
+      </h2>
+
+      <p className="alt-intro">
+        Multiple plausible factories were extracted. The differences below show how alternative interpretations diverge from the primary.
+      </p>
+
+      {/* Primary factory summary */}
+      {primaryFactory && (
+        <div className="primary-summary">
+          <h3 className="primary-label">Primary (selected)</h3>
+          <div className="primary-entities">
+            <span className="entity-count">
+              <strong>{primaryFactory.machines.length}</strong> machines
+            </span>
+            <span className="entity-separator">•</span>
+            <span className="entity-count">
+              <strong>{primaryFactory.jobs.length}</strong> jobs
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Alternative diffs */}
+      <ul className="alt-list">
+        {diffSummaries.map((diffInfo, idx) => {
+          const altFactory = altFactories[idx];
+          return (
+            <li key={idx} className="alt-item">
+              <div className="alt-header">
+                <span className="alt-label">Alt {idx + 1}</span>
+                <span className="alt-mode" title={getModeDescription(diffInfo.mode)}>
+                  {getModeLabel(diffInfo.mode)}
+                </span>
+              </div>
+              {altFactory && (
+                <div className="alt-entities">
+                  <span className="entity-count">
+                    {altFactory.machines.length} machines: {altFactory.machines.join(', ')}
+                  </span>
+                  <span className="entity-count">
+                    {altFactory.jobs.length} jobs: {altFactory.jobs.join(', ')}
+                  </span>
+                </div>
+              )}
+              <div className="alt-diff">
+                <span className="diff-icon">Δ</span>
+                <span className="diff-summary">{diffInfo.summary}</span>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <p className="alt-hint">
+        If an alternative looks more accurate, update your factory description to clarify and rerun.
+      </p>
     </div>
   );
 }

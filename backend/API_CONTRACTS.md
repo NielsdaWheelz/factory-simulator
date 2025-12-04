@@ -194,6 +194,70 @@ This document is the **canonical source of truth** for the HTTP and data contrac
 
 ---
 
+## POST /api/agent
+
+**Purpose**: Run the AI agent to analyze a factory description and situation. The agent plans and executes a series of steps including factory parsing, simulation, and briefing generation.
+
+### Request
+
+**Required Fields**:
+- `user_request` (string): Natural language request combining factory description and situation
+- `max_steps` (integer, optional): Maximum agent loop iterations (default: 15)
+- `llm_budget` (integer, optional): Maximum LLM calls allowed (default: 10)
+
+**Example**:
+```json
+{
+  "user_request": "Factory: We have 3 machines... Situation: Normal day, analyze bottlenecks.",
+  "max_steps": 15,
+  "llm_budget": 10
+}
+```
+
+### Response
+
+**Status**: 200 OK
+
+**Body**:
+
+**Schema** (top-level keys; exact order not guaranteed):
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `status` | string | Yes | Agent completion status: DONE, FAILED, MAX_STEPS, BUDGET_EXCEEDED |
+| `steps_taken` | integer | Yes | Number of execution steps taken |
+| `llm_calls_used` | integer | Yes | Number of LLM calls made |
+| `final_answer` | string \| null | Yes | Final markdown response from the agent |
+| `factory` | FactoryConfig \| null | Yes | Parsed factory configuration (null if parsing failed) |
+| `scenarios_run` | ScenarioSpec[] | Yes | List of scenarios that were simulated |
+| `metrics_collected` | ScenarioMetrics[] | Yes | Metrics for each simulated scenario |
+| `plan_summary` | string \| null | Yes | Human-readable summary of execution plan |
+| `plan_steps` | PlanStepInfo[] | Yes | Detailed plan step information |
+| `llm_calls` | LLMCallInfo[] | Yes | Record of all LLM calls for observability |
+| `data_flow` | DataFlowStepInfo[] | Yes | Detailed data flow through the system |
+| `trace` | AgentTraceStep[] | Yes | Execution trace for debugging |
+| `scratchpad` | string[] | Yes | Agent's internal reasoning trace |
+| `onboarding_issues` | OnboardingIssueInfo[] | Yes | Issues detected during factory onboarding |
+| `onboarding_score` | integer \| null | Yes | Onboarding quality score (0-100, null if not computed) |
+| `onboarding_trust` | string \| null | Yes | Trust level: HIGH_TRUST, MEDIUM_TRUST, LOW_TRUST, or null |
+
+**OnboardingIssueInfo Schema**:
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `type` | string | Yes | Issue type (e.g., coverage_miss, normalization_repair, alt_conflict) |
+| `severity` | string | Yes | Severity level: info, warning, or error |
+| `message` | string | Yes | Human-readable description of the issue |
+| `related_ids` | string[] \| null | No | Machine or job IDs related to this issue |
+
+**Contract Guarantees**:
+- Response always contains all listed top-level keys
+- `onboarding_issues` is an array (may be empty)
+- `onboarding_score` is null until scoring logic is implemented
+- `onboarding_trust` is null until trust computation is implemented
+
+---
+
 ## Error Responses
 
 All endpoints return standard HTTP error codes:
@@ -287,6 +351,18 @@ EXPECTED_SCENARIO_SPEC_KEYS = {"scenario_type", "rush_job_id", "slowdown_factor"
 
 # ScenarioMetrics keys (exact set)
 EXPECTED_SCENARIO_METRICS_KEYS = {"makespan_hour", "job_lateness", "bottleneck_machine_id", "bottleneck_utilization"}
+
+# /api/agent response top-level keys (exact set)
+EXPECTED_AGENT_KEYS = {
+    "status", "steps_taken", "llm_calls_used", "final_answer",
+    "factory", "scenarios_run", "metrics_collected",
+    "plan_summary", "plan_steps", "llm_calls", "data_flow",
+    "trace", "scratchpad",
+    "onboarding_issues", "onboarding_score", "onboarding_trust"
+}
+
+# OnboardingIssueInfo keys (exact set)
+EXPECTED_ONBOARDING_ISSUE_KEYS = {"type", "severity", "message", "related_ids"}
 ```
 
 Any addition, removal, or renaming of these keys requires a major version bump and must be coordinated with frontend and all consuming systems.

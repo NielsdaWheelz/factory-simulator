@@ -51,6 +51,50 @@ class ErrorType(str, Enum):
     TASK_UNSAT = "task_unsatisfiable"      # We proved it's impossible (e.g., can't parse factory)
 
 
+class OnboardingIssueSeverity(str, Enum):
+    """Severity levels for onboarding issues."""
+    INFO = "info"          # Informational, not a problem
+    WARNING = "warning"    # Potential issue, may need attention
+    ERROR = "error"        # Definite problem that affects onboarding quality
+
+
+class OnboardingIssueType(str, Enum):
+    """Types of issues that can occur during onboarding."""
+    COVERAGE_MISS = "coverage_miss"              # Explicit IDs mentioned but not in parsed config
+    NORMALIZATION_REPAIR = "normalization_repair"  # Config was repaired during normalization
+    ALT_CONFLICT = "alt_conflict"                # Alternative configs disagree on structure
+    LLM_DISAGREEMENT = "llm_disagreement"        # Multiple LLM passes produced different results
+    SIM_ANOMALY = "sim_anomaly"                  # Simulation revealed pathological behavior
+    INPUT_CONTRADICTION = "input_contradiction"  # Input text contains contradictory info
+
+
+class OnboardingTrust(str, Enum):
+    """Trust levels for onboarded factory configs."""
+    HIGH_TRUST = "HIGH_TRUST"      # Config is reliable, no conflicts, good coverage
+    MEDIUM_TRUST = "MEDIUM_TRUST"  # Some repairs or minor disagreements
+    LOW_TRUST = "LOW_TRUST"        # Conflicting configs or significant coverage misses
+
+
+# =============================================================================
+# ONBOARDING DIAGNOSTICS
+# =============================================================================
+
+class OnboardingIssue(BaseModel):
+    """
+    A single issue detected during onboarding.
+    
+    Issues are surfaced to help users understand why the parsed factory
+    may not be fully accurate and what clarifications might help.
+    """
+    type: str = Field(..., description="Issue type (e.g., coverage_miss, normalization_repair)")
+    severity: str = Field(..., description="Issue severity: info, warning, or error")
+    message: str = Field(..., description="Human-readable description of the issue")
+    related_ids: list[str] | None = Field(
+        default=None, 
+        description="Machine or job IDs related to this issue"
+    )
+
+
 # =============================================================================
 # ERROR TYPES (Phase 3)
 # =============================================================================
@@ -359,6 +403,11 @@ class AgentState(BaseModel):
         description="Extracted parameters from parsing"
     )
     
+    # Internal intermediate extraction results (not serialized, for tool reuse)
+    # These store raw LLM outputs so subsequent tools don't re-call
+    _coarse_structure: Any = PrivateAttr(default=None)  # CoarseStructure from extract_coarse_structure
+    _raw_factory_config: Any = PrivateAttr(default=None)  # RawFactoryConfig from extract_steps
+    
     scenarios_run: list[ScenarioSpec] = Field(
         default_factory=list,
         description="Scenarios that have been simulated"
@@ -382,6 +431,36 @@ class AgentState(BaseModel):
     errors_encountered: list[ErrorInfo] = Field(
         default_factory=list,
         description="All errors encountered during execution"
+    )
+    
+    # =========================================================================
+    # ONBOARDING DIAGNOSTICS (For Robust Onboarding)
+    # =========================================================================
+    onboarding_issues: list[OnboardingIssue] = Field(
+        default_factory=list,
+        description="Issues detected during factory onboarding (coverage misses, repairs, conflicts)"
+    )
+    onboarding_score: Optional[int] = Field(
+        default=None,
+        description="Onboarding quality score (0-100, None if not computed)"
+    )
+    onboarding_trust: Optional[str] = Field(
+        default=None,
+        description="Trust level: HIGH_TRUST, MEDIUM_TRUST, or LOW_TRUST"
+    )
+    
+    # Alternative configs from multi-pass onboarding (PR9)
+    alt_factories: list[FactoryConfig] = Field(
+        default_factory=list,
+        description="Alternative factory interpretations from multi-pass extraction"
+    )
+    alt_factory_modes: list[str] = Field(
+        default_factory=list,
+        description="Extraction modes that produced each alternative config"
+    )
+    diff_summaries: list[str] = Field(
+        default_factory=list,
+        description="Human-readable summaries of differences between primary and each alternative"
     )
     
     # =========================================================================
@@ -624,3 +703,59 @@ class AgentState(BaseModel):
             parts.append(f"{status_icon} {step.type.value}{param_str}")
         
         return " → ".join(parts)
+    
+    # =========================================================================
+    # ONBOARDING DIAGNOSTICS HELPERS
+    # =========================================================================
+    
+    def add_onboarding_issue(
+        self,
+        issue_type: str,
+        severity: str,
+        message: str,
+        related_ids: list[str] | None = None,
+    ) -> None:
+        """
+        Add an onboarding issue to the state.
+        
+        Args:
+            issue_type: Type of issue (e.g., "coverage_miss", "normalization_repair")
+            severity: Severity level ("info", "warning", "error")
+            message: Human-readable description
+            related_ids: Optional list of machine/job IDs related to this issue
+        """
+        self.onboarding_issues.append(OnboardingIssue(
+            type=issue_type,
+            severity=severity,
+            message=message,
+            related_ids=related_ids,
+        ))
+    
+    def set_onboarding_score(self, score: int, trust: str) -> None:
+        """
+        Set the onboarding quality score and trust level.
+        
+        Args:
+            score: Quality score (0-100)
+            trust: Trust level ("HIGH_TRUST", "MEDIUM_TRUST", "LOW_TRUST")
+        """
+        self.onboarding_score = score
+        self.onboarding_trust = trust
+    
+    def set_alternative_factories(
+        self,
+        alt_factories: list[FactoryConfig],
+        alt_modes: list[str],
+        diff_summaries: list[str],
+    ) -> None:
+        """
+        Set alternative factory interpretations from multi-pass extraction.
+        
+        Args:
+            alt_factories: List of alternative FactoryConfig objects
+            alt_modes: Extraction modes that produced each alternative
+            diff_summaries: Human-readable diff summaries for each alternative
+        """
+        self.alt_factories = alt_factories
+        self.alt_factory_modes = alt_modes
+        self.diff_summaries = diff_summaries
