@@ -43,6 +43,7 @@ from .onboarding import (
     estimate_onboarding_coverage,
     run_multi_pass_onboarding,
     compute_factory_diff,
+    generate_clarifying_questions,
     ExtractionError,
 )
 
@@ -587,12 +588,22 @@ class ParseFactoryTool(Tool):
                 alt_conflicts=alt_conflict_count,
             )
             state.set_onboarding_score(score, trust)
-            
-            # Store alternative factories for frontend display (PR9)
+
+            # Generate clarifying questions from diffs
+            questions = generate_clarifying_questions(
+                primary=factory,
+                alternatives=multi_pass_result.alt_configs,
+                diffs=multi_pass_result.diffs,
+                modes=multi_pass_result.alt_modes,
+            )
+
+            # Store alternative factories + diffs + questions for frontend display (PR9)
             state.set_alternative_factories(
                 alt_factories=multi_pass_result.alt_configs,
                 alt_modes=multi_pass_result.alt_modes,
                 diff_summaries=multi_pass_result.diff_summaries,
+                diffs=multi_pass_result.diffs,
+                questions=questions,
             )
             
             self._create_diagnostics_summary_step(

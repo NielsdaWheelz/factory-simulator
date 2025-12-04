@@ -155,39 +155,54 @@ export interface DiffSummaryInfo {
   summary: string;  // Human-readable summary of differences
 }
 
+// Detailed structural diff between primary and alternative config (PR10)
+export interface DiffDetailInfo {
+  machines_added: string[];
+  machines_removed: string[];
+  jobs_added: string[];
+  jobs_removed: string[];
+  routing_differences: Record<string, { a: string[]; b: string[] }>;
+  timing_differences: Record<string, Record<string, any>>;
+  is_identical: boolean;
+}
+
 export interface AgentResponse {
   status: AgentStatus;
   steps_taken: number;
   llm_calls_used: number;
   final_answer: string | null;
-  
+
   // Domain results
   factory: FactoryConfig | null;
   scenarios_run: ScenarioSpec[];
   metrics_collected: ScenarioMetrics[];
-  
+
   // Plan information
   plan_summary: string | null;
   plan_steps: PlanStepInfo[];
-  
+
   // LLM call tracking
   llm_calls: LLMCallInfo[];
-  
+
   // Data flow visualization
   data_flow: DataFlowStepInfo[];
-  
+
   // Execution trace
   trace: AgentTraceStep[];
   scratchpad: string[];
-  
+
   // Onboarding diagnostics
   onboarding_issues: OnboardingIssueInfo[];
   onboarding_score: number | null;
   onboarding_trust: OnboardingTrust | null;
-  
+
   // Alternative factory interpretations (PR9)
   alt_factories: AltFactoryInfo[];
   diff_summaries: DiffSummaryInfo[];
+
+  // Structured diffs and clarifying questions (PR10)
+  alt_factory_diffs: DiffDetailInfo[];
+  clarifying_questions: string[];
 }
 
 const DEFAULT_API_BASE_URL = 'http://localhost:8000';

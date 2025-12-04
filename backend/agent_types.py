@@ -462,6 +462,14 @@ class AgentState(BaseModel):
         default_factory=list,
         description="Human-readable summaries of differences between primary and each alternative"
     )
+    alt_factory_diffs: list[Any] = Field(
+        default_factory=list,
+        description="Structured FactoryDiff objects between primary and each alternative"
+    )
+    clarifying_questions: list[str] = Field(
+        default_factory=list,
+        description="Targeted questions generated from config differences"
+    )
     
     # =========================================================================
     # LLM CALL TRACKING (For Demo Observability)
@@ -747,15 +755,21 @@ class AgentState(BaseModel):
         alt_factories: list[FactoryConfig],
         alt_modes: list[str],
         diff_summaries: list[str],
+        diffs: list[Any] | None = None,
+        questions: list[str] | None = None,
     ) -> None:
         """
         Set alternative factory interpretations from multi-pass extraction.
-        
+
         Args:
             alt_factories: List of alternative FactoryConfig objects
             alt_modes: Extraction modes that produced each alternative
             diff_summaries: Human-readable diff summaries for each alternative
+            diffs: Structured FactoryDiff objects for each alternative
+            questions: Targeted clarifying questions derived from diffs
         """
         self.alt_factories = alt_factories
         self.alt_factory_modes = alt_modes
         self.diff_summaries = diff_summaries
+        self.alt_factory_diffs = diffs or []
+        self.clarifying_questions = questions or []

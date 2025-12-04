@@ -16,6 +16,7 @@ from backend.onboarding import (
     compute_factory_diff,
     run_onboarding_pass,
     run_multi_pass_onboarding,
+    generate_clarifying_questions,
     FactoryDiff,
     OnboardingPassResult,
     MultiPassResult,
@@ -670,4 +671,152 @@ class TestParseFactoryToolMultiPass:
         
         # Score should be lower with conflicts
         assert score_with_conflicts < score_no_conflicts
+
+
+# =============================================================================
+# TESTS FOR generate_clarifying_questions
+# =============================================================================
+
+class TestGenerateClarifyingQuestions:
+    """Tests for generating clarifying questions from diffs."""
+
+    def test_no_questions_for_identical_configs(self, simple_factory_a, simple_factory_b_same):
+        """Should return no questions if configs are identical."""
+        diff = compute_factory_diff(simple_factory_a, simple_factory_b_same)
+        questions = generate_clarifying_questions(
+            primary=simple_factory_a,
+            alternatives=[simple_factory_b_same],
+            diffs=[diff],
+            modes=["conservative"],
+        )
+
+        assert questions == []
+
+    def test_routing_difference_generates_question(self, simple_factory_a, factory_with_different_routing):
+        """Should generate question about routing differences."""
+        diff = compute_factory_diff(simple_factory_a, factory_with_different_routing)
+        questions = generate_clarifying_questions(
+            primary=simple_factory_a,
+            alternatives=[factory_with_different_routing],
+            diffs=[diff],
+            modes=["conservative"],
+        )
+
+        assert len(questions) >= 1
+        # Should mention the job ID and both routes
+        question = questions[0]
+        assert "J1" in question
+        assert "routing" in question.lower() or "route" in question.lower()
+        assert "M1" in question and "M2" in question
+
+    def test_machine_added_generates_question(self, simple_factory_a, factory_with_extra_machine):
+        """Should generate question about added machines."""
+        diff = compute_factory_diff(simple_factory_a, factory_with_extra_machine)
+        questions = generate_clarifying_questions(
+            primary=simple_factory_a,
+            alternatives=[factory_with_extra_machine],
+            diffs=[diff],
+            modes=["inclusive"],
+        )
+
+        assert len(questions) >= 1
+        # Should mention M3 (the added machine)
+        question = " ".join(questions)
+        assert "M3" in question
+
+    def test_machine_removed_generates_question(self, factory_with_extra_machine, simple_factory_a):
+        """Should generate question about removed machines."""
+        diff = compute_factory_diff(factory_with_extra_machine, simple_factory_a)
+        questions = generate_clarifying_questions(
+            primary=factory_with_extra_machine,
+            alternatives=[simple_factory_a],
+            diffs=[diff],
+            modes=["conservative"],
+        )
+
+        assert len(questions) >= 1
+        # Should mention M3 (the removed machine)
+        question = " ".join(questions)
+        assert "M3" in question
+
+    def test_timing_difference_generates_question(self, simple_factory_a, factory_with_different_timing):
+        """Should generate question about timing differences."""
+        diff = compute_factory_diff(simple_factory_a, factory_with_different_timing)
+        questions = generate_clarifying_questions(
+            primary=simple_factory_a,
+            alternatives=[factory_with_different_timing],
+            diffs=[diff],
+            modes=["conservative"],
+        )
+
+        assert len(questions) >= 1
+        # Should mention J1 and due time
+        question = " ".join(questions)
+        assert "J1" in question
+        assert "due" in question.lower() or "time" in question.lower()
+
+    def test_max_five_questions(self):
+        """Should limit output to 5 questions max."""
+        # Create many differences
+        primary = FactoryConfig(
+            machines=[Machine(id=f"M{i}", name=f"Machine {i}") for i in range(1, 11)],
+            jobs=[Job(id="J1", name="Job 1", steps=[Step(machine_id="M1", duration_hours=1)], due_time_hour=10)],
+        )
+
+        alt = FactoryConfig(
+            machines=[Machine(id=f"M{i}", name=f"Machine {i}") for i in range(2, 12)],  # Different set
+            jobs=[Job(id="J1", name="Job 1", steps=[Step(machine_id="M2", duration_hours=1)], due_time_hour=10)],
+        )
+
+        diff = compute_factory_diff(primary, alt)
+        questions = generate_clarifying_questions(
+            primary=primary,
+            alternatives=[alt],
+            diffs=[diff],
+            modes=["conservative"],
+        )
+
+        # Should be capped at 5
+        assert len(questions) <= 5
+
+    def test_multiple_diffs_multiple_questions(self, simple_factory_a):
+        """Should generate questions for each alternative config."""
+        alt1 = FactoryConfig(
+            machines=[Machine(id="M1", name="Assembly"), Machine(id="M3", name="Pack")],  # M2 removed
+            jobs=simple_factory_a.jobs,
+        )
+
+        alt2 = FactoryConfig(
+            machines=simple_factory_a.machines + [Machine(id="M4", name="Inspect")],  # M4 added
+            jobs=simple_factory_a.jobs,
+        )
+
+        diff1 = compute_factory_diff(simple_factory_a, alt1)
+        diff2 = compute_factory_diff(simple_factory_a, alt2)
+
+        questions = generate_clarifying_questions(
+            primary=simple_factory_a,
+            alternatives=[alt1, alt2],
+            diffs=[diff1, diff2],
+            modes=["conservative", "inclusive"],
+        )
+
+        # Should have questions about both diffs
+        assert len(questions) >= 2
+        question_text = " ".join(questions)
+        # M2 removed in alt1, M4 added in alt2
+        assert "M2" in question_text or "M3" in question_text or "M4" in question_text
+
+    def test_questions_mention_mode(self, simple_factory_a, factory_with_extra_machine):
+        """Questions should mention which mode produced the alternative."""
+        diff = compute_factory_diff(simple_factory_a, factory_with_extra_machine)
+        questions = generate_clarifying_questions(
+            primary=simple_factory_a,
+            alternatives=[factory_with_extra_machine],
+            diffs=[diff],
+            modes=["conservative"],
+        )
+
+        # Should mention the mode
+        assert any("conservative" in q.lower() for q in questions)
 
