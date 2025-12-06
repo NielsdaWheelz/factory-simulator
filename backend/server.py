@@ -16,7 +16,7 @@ import sys
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Any, Optional
 
 from .agent_engine import run_agent
 from .agent_types import AgentState, AgentStatus
@@ -162,7 +162,7 @@ class DiffDetailInfo(BaseModel):
     jobs_added: list[str] = Field(default_factory=list)
     jobs_removed: list[str] = Field(default_factory=list)
     routing_differences: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
-    timing_differences: dict[str, dict[str, int]] = Field(default_factory=dict)
+    timing_differences: dict[str, dict[str, Any]] = Field(default_factory=dict)
     is_identical: bool = Field(default=True)
 
 
